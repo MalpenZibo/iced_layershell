@@ -132,8 +132,6 @@ impl<M> From<iced_runtime::Task<M>> for Task<M> {
     }
 }
 
-// --- Free functions for layer shell commands ---
-
 /// Create a new layer shell surface. Returns the assigned ID and a task.
 pub fn new_layer_surface<M>(settings: LayerShellSettings) -> (SurfaceId, Task<M>) {
     let id = SurfaceId::unique();

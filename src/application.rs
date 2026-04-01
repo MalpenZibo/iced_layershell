@@ -35,6 +35,8 @@ use crate::task_impl::{LayerShellCommand, Task};
 type Element<'a, M> = iced_core::Element<'a, M, Theme, iced_renderer::Renderer>;
 
 /// Builder for a layer shell application.
+///
+/// Created via [`application()`], configured with builder methods, then started with [`run()`](Self::run).
 pub struct Application<State, Message> {
     boot: Box<dyn FnOnce() -> (State, Task<Message>)>,
     update: Box<dyn Fn(&mut State, Message) -> Task<Message>>,
@@ -53,11 +55,13 @@ where
     State: 'static,
     Message: std::fmt::Debug + Send + Clone + 'static,
 {
+    /// Configure the initial layer shell surface.
     pub fn layer_shell(mut self, settings: LayerShellSettings) -> Self {
         self.initial_settings = Some(settings);
         self
     }
 
+    /// Set the subscription function for async background tasks (timers, streams, etc.).
     pub fn subscription(
         mut self,
         f: impl Fn(&State) -> iced_futures::Subscription<Message> + 'static,
@@ -66,16 +70,19 @@ where
         self
     }
 
+    /// Set the theme function. Called each frame to determine the current theme.
     pub fn theme(mut self, f: impl Fn(&State) -> Theme + 'static) -> Self {
         self.theme_fn = Some(Box::new(f));
         self
     }
 
+    /// Load a custom font from bytes at startup.
     pub fn font(mut self, bytes: impl Into<Cow<'static, [u8]>>) -> Self {
         self.fonts.push(bytes.into());
         self
     }
 
+    /// Set the default font for text rendering.
     pub fn default_font(mut self, font: Font) -> Self {
         self.default_font = font;
         self
@@ -88,17 +95,23 @@ where
         self
     }
 
+    /// Enable or disable antialiasing (MSAAx4).
     pub fn antialiasing(mut self, enabled: bool) -> Self {
         self.antialiasing = enabled;
         self
     }
 
+    /// Run the application, blocking until it exits.
     pub fn run(self) -> Result<(), Error> {
         run(self)
     }
 }
 
-/// Create a new layer shell application builder.
+/// Create a new layer shell application with the Elm architecture.
+///
+/// - `boot` initializes state and returns an optional startup task.
+/// - `update` handles messages and returns tasks.
+/// - `view` builds the UI for a given surface (called with each [`SurfaceId`]).
 pub fn application<State, Message>(
     boot: impl FnOnce() -> (State, Task<Message>) + 'static,
     update: impl Fn(&mut State, Message) -> Task<Message> + 'static,
@@ -176,10 +189,8 @@ where
 {
     let initial_settings = app.initial_settings.ok_or(Error::NoSettings)?;
 
-    // Initialize output event channel
     crate::output_subscription::init();
 
-    // --- Phase 1: Wayland setup ---
     let conn = Connection::connect_to_env()?;
     let display_ptr = conn.backend().display_ptr() as *mut std::ffi::c_void;
     // Create clipboard early — smithay-clipboard spawns its own worker thread
@@ -253,7 +264,6 @@ where
             .map_err(|e| Error::EventLoop(e.to_string()))?;
     }
 
-    // --- Phase 1b: iced compositor + renderer ---
     let main_data = wl_state.surfaces.get(&main_wl).unwrap();
     let monitor_scale = main_data.scale_factor.max(1) as u32;
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
@@ -309,11 +319,6 @@ where
         },
     );
 
-    // --- Phase 2: Boot + iced_futures::Runtime ---
-
-    // Set up the iced_futures runtime for subscriptions and async task execution.
-    // WakeupSender wraps the mpsc sender to signal a calloop ping on each send,
-    // so the event loop wakes immediately when async tasks produce messages.
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
     let (ping, ping_source) = calloop::ping::make_ping()
@@ -349,7 +354,6 @@ where
     // Create iced rendering surfaces for everything registered
     sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, 1.0);
 
-    // --- Phase 3: Insert event sources into calloop event loop ---
     event_loop.handle()
         .insert_source(ping_source, |_, _, _| {})
         .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -359,12 +363,10 @@ where
 
     let mut running = true;
 
-    // Build initial persistent UIs (same ManuallyDrop pattern as iced_winit)
     let mut user_interfaces = ManuallyDrop::new(
         build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
     );
 
-    // Reusable buffers — hoisted outside the loop to avoid per-frame allocations
     let mut runtime_messages: Vec<Message> = Vec::new();
     let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
     let mut all_messages: Vec<Message> = Vec::new();
@@ -374,7 +376,6 @@ where
 
     let mut first_frame = true;
     while running {
-        // --- a. Dispatch wayland events (blocks until something happens) ---
         let timeout = if first_frame {
             first_frame = false;
             Some(std::time::Duration::ZERO)
@@ -389,14 +390,12 @@ where
             break;
         }
 
-        // Bridge wl_state.surfaces_need_redraw → iced_s.needs_redraw
         for id in wl_state.surfaces_need_redraw.drain() {
             if let Some(iced_s) = iced_surfaces.get_mut(&id) {
                 iced_s.needs_redraw = true;
             }
         }
 
-        // --- b. Handle closed surfaces ---
         for closed_id in wl_state.closed_surfaces.drain(..) {
             user_interfaces.remove(&closed_id);
             iced_surfaces.remove(&closed_id);
@@ -412,7 +411,6 @@ where
             wl_state.touch_fingers.retain(|_, (sid, _)| *sid != closed_id);
         }
 
-        // --- c. Drain async actions and process synchronously ---
         runtime_messages.clear();
         loop {
             match runtime_receiver.try_recv() {
@@ -431,17 +429,14 @@ where
             }
         }
 
-        // --- d. Track subscriptions (wrapped in Action::Output for the runtime) ---
         if let Some(ref sub_fn) = app.subscription_fn {
             let subscription = sub_fn(&user_state).map(Action::Output);
             let recipes = iced_futures::subscription::into_recipes(subscription);
             runtime.track(recipes);
         }
 
-        // --- e. Output events ---
         crate::output_subscription::push_events(mem::take(&mut wl_state.output_events));
 
-        // --- f. Compute app scale and update viewports ---
         let app_scale = app
             .scale_factor_fn
             .as_ref()
@@ -471,7 +466,6 @@ where
         // Create iced rendering surfaces for newly configured wayland surfaces
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
-        // --- g. Transform and group events ---
         let pending_events = mem::take(&mut wl_state.pending_events);
         let scale = |p: iced_core::Point| iced_core::Point::new(p.x / app_scale, p.y / app_scale);
         surface_events.clear();
@@ -501,11 +495,7 @@ where
         all_messages.extend(runtime_messages.drain(..));
         let has_runtime_messages = !all_messages.is_empty();
 
-        // ==================================================================
-        // PHASE 1: Update EXISTING UIs with user events (like iced_winit's
-        // AboutToWait). Widgets persist across frames — button.status
-        // carries over. Only mark for redraw if a widget requests it.
-        // ==================================================================
+        // Update persistent UIs with pending events
         surface_ids.clear();
         surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
@@ -549,9 +539,6 @@ where
             }
         }
 
-        // ==================================================================
-        // Process messages: drop UIs → mutate state → rebuild UIs
-        // ==================================================================
         pending_creations.clear();
         if !all_messages.is_empty() {
             // Drop all UIs before mutating state (same as iced_winit)
@@ -597,12 +584,7 @@ where
             }
         }
 
-        // ==================================================================
-        // PHASE 2: Draw + present surfaces that need redraw (like iced_winit's
-        // RedrawRequested). Send RedrawRequested so widgets commit visual
-        // status, then draw and present.
-        // ==================================================================
-        // Re-collect surface_ids to include surfaces created during message processing
+        // Draw and present surfaces that need redraw
         surface_ids.clear();
         surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
@@ -632,7 +614,7 @@ where
                 mouse::Cursor::Unavailable
             };
 
-            // Inject RedrawRequested — widgets commit visual status on this
+            // RedrawRequested makes widgets commit their visual status
             let redraw_event = [iced_core::Event::Window(
                 iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
             )];
@@ -681,7 +663,7 @@ fn build_single_ui<'a, State, Message: 'a>(
     UserInterface::build(element, iced_s.viewport.logical_size(), cache, renderer)
 }
 
-/// Build a UserInterface for each surface, like iced_winit's build_user_interfaces.
+/// Build a [`UserInterface`] for every registered surface.
 fn build_user_interfaces<'a, State, Message: 'a>(
     view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
     user_state: &'a State,
@@ -755,7 +737,8 @@ fn run_action<Message: std::fmt::Debug>(
     }
 }
 
-/// Split our Task into layer shell commands, iced tasks, and surface creations.
+/// Route a [`Task`] to the appropriate handler: layer shell commands go to
+/// [`apply_layer_shell_command`], iced tasks are spawned on the async runtime.
 fn process_task<M: Send + Clone + 'static>(
     task: Task<M>,
     wl_state: &mut WaylandState,
@@ -797,6 +780,7 @@ fn process_task<M: Send + Clone + 'static>(
     }
 }
 
+/// Apply a synchronous layer shell command (surface create/destroy, property changes).
 fn apply_layer_shell_command(
     cmd: LayerShellCommand,
     state: &mut WaylandState,
@@ -872,6 +856,7 @@ fn apply_layer_shell_command(
     }
 }
 
+/// Create a new Wayland layer surface from settings, targeting a specific output if configured.
 fn create_layer_surface(
     compositor_state: &CompositorState,
     layer_shell_state: &LayerShell,
