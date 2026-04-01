@@ -96,7 +96,7 @@ where
         self
     }
 
-    /// Enable or disable antialiasing (MSAAx4).
+    /// Enable or disable antialiasing (`MSAAx4`).
     pub fn antialiasing(mut self, enabled: bool) -> Self {
         self.antialiasing = enabled;
         self
@@ -186,6 +186,12 @@ impl<M> Sink<Action<M>> for WakeupSender<M> {
 
 impl<M> Unpin for WakeupSender<M> {}
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
+)]
 fn run<State, Message>(app: Application<State, Message>) -> Result<(), Error>
 where
     State: 'static,
@@ -196,7 +202,7 @@ where
     crate::output_subscription::init();
 
     let conn = Connection::connect_to_env()?;
-    let display_ptr = conn.backend().display_ptr() as *mut std::ffi::c_void;
+    let display_ptr = conn.backend().display_ptr().cast::<std::ffi::c_void>();
     // Create clipboard early — smithay-clipboard spawns its own worker thread
     // with its own wayland connection that needs to receive selection events
     let mut clipboard = unsafe { WaylandClipboard::new(display_ptr) };
@@ -370,7 +376,7 @@ where
 
     event_loop
         .handle()
-        .insert_source(ping_source, |_, _, _| {})
+        .insert_source(ping_source, |(), (), _| {})
         .map_err(|e| Error::EventLoop(e.to_string()))?;
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
@@ -467,7 +473,8 @@ where
                     let new_vp =
                         Viewport::with_physical_size(Size::new(phys_w, phys_h), combined_scale);
                     if iced.viewport.physical_size() != new_vp.physical_size()
-                        || iced.viewport.scale_factor() != new_vp.scale_factor()
+                        || (iced.viewport.scale_factor() - new_vp.scale_factor()).abs()
+                            > f32::EPSILON
                     {
                         compositor.configure_surface(&mut iced.surface, phys_w, phys_h);
                         iced.viewport = new_vp;
@@ -538,9 +545,8 @@ where
                 continue;
             }
 
-            let ui = match user_interfaces.get_mut(surface_id) {
-                Some(ui) => ui,
-                None => continue,
+            let Some(ui) = user_interfaces.get_mut(surface_id) else {
+                continue;
             };
 
             let cursor = if wl_state.pointer_surface == Some(*surface_id) {
@@ -673,9 +679,8 @@ where
                 _ => continue,
             };
 
-            let ui = match user_interfaces.get_mut(surface_id) {
-                Some(ui) => ui,
-                None => continue,
+            let Some(ui) = user_interfaces.get_mut(surface_id) else {
+                continue;
             };
 
             let cursor = if wl_state.pointer_surface == Some(*surface_id) {
@@ -742,7 +747,7 @@ where
     Ok(())
 }
 
-/// Build a single UserInterface for a surface.
+/// Build a single `UserInterface` for a surface.
 fn build_single_ui<'a, State, Message: 'a>(
     view: &dyn for<'v> Fn(
         &'v State,
@@ -1034,6 +1039,7 @@ fn create_layer_surface(
 }
 
 /// Ensure every registered wayland surface has a corresponding iced rendering surface.
+#[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
 fn sync_iced_surfaces(
     wl_state: &WaylandState,
     compositor: &mut Compositor,

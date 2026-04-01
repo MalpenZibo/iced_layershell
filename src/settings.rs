@@ -18,6 +18,7 @@ impl SurfaceId {
         Self(NEXT_SURFACE_ID.fetch_add(1, Ordering::Relaxed))
     }
 
+    #[must_use]
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
@@ -40,10 +41,12 @@ impl Anchor {
     pub const LEFT: Self = Self(4);
     pub const RIGHT: Self = Self(8);
 
+    #[must_use]
     pub fn all() -> Self {
         Self(Self::TOP.0 | Self::BOTTOM.0 | Self::LEFT.0 | Self::RIGHT.0)
     }
 
+    #[must_use]
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }

@@ -14,7 +14,7 @@ pub(crate) fn init() {
     RECEIVER.get_or_init(|| std::sync::Mutex::new(Some(receiver)));
 }
 
-/// Push output events from the SCTK OutputHandler.
+/// Push output events from the SCTK `OutputHandler`.
 pub(crate) fn push_events(events: Vec<OutputEvent>) {
     if let Some(sender) = SENDER.get() {
         for event in events {

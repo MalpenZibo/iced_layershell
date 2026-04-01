@@ -48,7 +48,7 @@ pub(crate) struct SurfaceData {
     pub scale_factor: i32,
     pub configured: bool,
     pub frame_pending: bool,
-    /// Set when we drew but couldn't present (frame_pending was true).
+    /// Set when we drew but couldn't present (`frame_pending` was true).
     /// Frame callback will trigger a redraw to flush the pending visual.
     pub needs_rerender: bool,
 }
@@ -113,7 +113,7 @@ impl WaylandState {
         loop_handle: LoopHandle<'static, WaylandState>,
         conn: &Connection,
     ) -> Self {
-        let display_ptr = conn.backend().display_ptr() as *mut std::ffi::c_void;
+        let display_ptr = conn.backend().display_ptr().cast::<std::ffi::c_void>();
 
         Self {
             registry,
@@ -171,6 +171,8 @@ impl WaylandState {
         interaction: iced_core::mouse::Interaction,
         qh: &QueueHandle<WaylandState>,
     ) {
+        use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
+
         if interaction == self.current_mouse_interaction {
             return;
         }
@@ -182,8 +184,6 @@ impl WaylandState {
         let Some(pointer) = &self.wl_pointer else {
             return;
         };
-
-        use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
         // For a status bar, only change cursor for text input fields.
         // Everything else keeps the default arrow.
@@ -219,7 +219,7 @@ unsafe impl Sync for WaylandWindow {}
 impl WaylandWindow {
     pub fn new(display_ptr: *mut std::ffi::c_void, surface: &WlSurface) -> Option<Self> {
         let display = NonNull::new(display_ptr)?;
-        let surface_ptr = Proxy::id(surface).as_ptr() as *mut std::ffi::c_void;
+        let surface_ptr = Proxy::id(surface).as_ptr().cast::<std::ffi::c_void>();
         let surface = NonNull::new(surface_ptr)?;
         Some(Self { display, surface })
     }
@@ -528,6 +528,11 @@ impl KeyboardHandler for WaylandState {
 }
 
 impl PointerHandler for WaylandState {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss
+    )]
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
@@ -536,9 +541,8 @@ impl PointerHandler for WaylandState {
         events: &[PointerEvent],
     ) {
         for event in events {
-            let surface_id = match self.surface_id_for(&event.surface) {
-                Some(id) => id,
-                None => continue,
+            let Some(surface_id) = self.surface_id_for(&event.surface) else {
+                continue;
             };
 
             match event.kind {
@@ -663,8 +667,8 @@ impl OutputHandler for WaylandState {
                 existing.name = si.name.clone().unwrap_or_default();
                 existing.scale_factor = si.scale_factor;
                 existing.logical_size = si.logical_size.map(|s| (s.0, s.1));
-                existing.make = si.make.clone();
-                existing.model = si.model.clone();
+                existing.make.clone_from(&si.make);
+                existing.model.clone_from(&si.model);
             }
             self.output_events
                 .push(OutputEvent::InfoChanged(existing.clone()));
@@ -797,6 +801,11 @@ delegate_data_device!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_output!(WaylandState);
 delegate_registry!(WaylandState);
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 impl TouchHandler for WaylandState {
     fn down(
         &mut self,

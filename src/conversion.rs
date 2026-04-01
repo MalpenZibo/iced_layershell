@@ -19,6 +19,7 @@ pub(crate) fn modifiers_to_iced(mods: Modifiers) -> keyboard::Modifiers {
     result
 }
 
+#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn pointer_button_to_iced(button: u32) -> mouse::Button {
     match button {
         0x110 => mouse::Button::Left,   // BTN_LEFT
@@ -29,7 +30,7 @@ pub(crate) fn pointer_button_to_iced(button: u32) -> mouse::Button {
 }
 
 /// Convert keysym to iced Key. This returns the BASE key (unmodified),
-/// used for the `key` field in KeyPressed. The keysym represents the
+/// used for the `key` field in `KeyPressed`. The keysym represents the
 /// logical key regardless of Ctrl/Alt modifiers.
 pub(crate) fn keysym_to_iced_key(keysym: Keysym) -> keyboard::Key {
     if let Some(named) = keysym_to_named(keysym) {
@@ -39,6 +40,7 @@ pub(crate) fn keysym_to_iced_key(keysym: Keysym) -> keyboard::Key {
     // This ensures Ctrl+C produces Key::Character("c"), not Key::Character("\x03").
     let raw = keysym.raw();
     if (0x20..=0x7e).contains(&raw) {
+        #[allow(clippy::cast_possible_truncation)] // range-checked above
         return keyboard::Key::Character(String::from(char::from(raw as u8)).into());
     }
     // For non-ASCII keysyms (e.g. accented characters), try xkb mapping
@@ -98,13 +100,13 @@ fn keysym_to_named(keysym: Keysym) -> Option<keyboard::key::Named> {
         0xffc9 => Named::F12,
 
         // Media keys
-        0x1008ff11 => Named::AudioVolumeDown,
-        0x1008ff12 => Named::AudioVolumeMute,
-        0x1008ff13 => Named::AudioVolumeUp,
-        0x1008ff14 => Named::MediaPlayPause,
-        0x1008ff15 => Named::MediaStop,
-        0x1008ff16 => Named::MediaTrackPrevious,
-        0x1008ff17 => Named::MediaTrackNext,
+        0x1008_ff11 => Named::AudioVolumeDown,
+        0x1008_ff12 => Named::AudioVolumeMute,
+        0x1008_ff13 => Named::AudioVolumeUp,
+        0x1008_ff14 => Named::MediaPlayPause,
+        0x1008_ff15 => Named::MediaStop,
+        0x1008_ff16 => Named::MediaTrackPrevious,
+        0x1008_ff17 => Named::MediaTrackNext,
 
         // Misc
         0xff61 => Named::PrintScreen,
@@ -119,9 +121,9 @@ fn keysym_to_named(keysym: Keysym) -> Option<keyboard::key::Named> {
 
 /// Convert XKB keysym to Unicode character (for non-ASCII keysyms).
 fn keysym_to_char(keysym: u32) -> Option<char> {
-    // Unicode keysyms: 0x01000000 + codepoint
-    if keysym >= 0x01000000 {
-        return char::from_u32(keysym - 0x01000000);
+    // Unicode keysyms: 0x0100_0000 + codepoint
+    if keysym >= 0x0100_0000 {
+        return char::from_u32(keysym - 0x0100_0000);
     }
     // Latin-1 supplement: keysyms 0xa0-0xff map to Unicode U+00A0-U+00FF
     if (0xa0..=0xff).contains(&keysym) {
@@ -139,7 +141,8 @@ pub(crate) fn key_utf8_to_text(utf8: Option<&str>) -> Option<iced_core::SmolStr>
 
 /// Map Linux evdev scancode to iced Physical key.
 /// Mapping derived from linux/include/uapi/linux/input-event-codes.h,
-/// matching winit's scancode_to_physicalkey().
+/// matching winit's `scancode_to_physicalkey()`.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn scancode_to_physical(scancode: u32) -> keyboard::key::Physical {
     use keyboard::key::{Code, NativeCode, Physical};
     Physical::Code(match scancode {
@@ -459,23 +462,23 @@ mod tests {
     #[test]
     fn keysym_media_keys() {
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x1008ff11)),
+            keysym_to_iced_key(Keysym::new(0x1008_ff11)),
             Key::Named(Named::AudioVolumeDown)
         );
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x1008ff12)),
+            keysym_to_iced_key(Keysym::new(0x1008_ff12)),
             Key::Named(Named::AudioVolumeMute)
         );
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x1008ff13)),
+            keysym_to_iced_key(Keysym::new(0x1008_ff13)),
             Key::Named(Named::AudioVolumeUp)
         );
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x1008ff14)),
+            keysym_to_iced_key(Keysym::new(0x1008_ff14)),
             Key::Named(Named::MediaPlayPause)
         );
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x1008ff17)),
+            keysym_to_iced_key(Keysym::new(0x1008_ff17)),
             Key::Named(Named::MediaTrackNext)
         );
     }
@@ -511,11 +514,11 @@ mod tests {
     #[test]
     fn keysym_unicode() {
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x010000e9)),
+            keysym_to_iced_key(Keysym::new(0x0100_00e9)),
             Key::Character("é".into())
         );
         assert_eq!(
-            keysym_to_iced_key(Keysym::new(0x0101f389)),
+            keysym_to_iced_key(Keysym::new(0x0101_f389)),
             Key::Character("\u{1f389}".into())
         );
     }

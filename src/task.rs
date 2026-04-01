@@ -28,6 +28,7 @@ pub enum Task<M> {
 
 impl<M> Task<M> {
     /// A task that does nothing.
+    #[must_use]
     pub fn none() -> Self {
         Self::Iced(iced_runtime::Task::none())
     }
@@ -52,6 +53,7 @@ impl<M> Task<M> {
     }
 
     /// Batch multiple tasks together.
+    #[allow(clippy::missing_panics_doc)] // unwrap is guarded by len() == 1
     pub fn batch(tasks: impl IntoIterator<Item = Self>) -> Self {
         let tasks: Vec<Self> = tasks.into_iter().collect();
         match tasks.len() {
@@ -76,6 +78,7 @@ impl<M> Task<M> {
     }
 
     /// Make this task abortable. Returns the task and a handle to abort it.
+    #[must_use]
     pub fn abortable(self) -> (Self, iced_runtime::task::Handle)
     where
         M: Send + 'static,
@@ -95,6 +98,7 @@ impl<M> Task<M> {
     }
 
     /// Chain another task after this one.
+    #[must_use]
     pub fn chain(self, task: Self) -> Self
     where
         M: Send + 'static,
@@ -106,6 +110,7 @@ impl<M> Task<M> {
     }
 
     /// Discard the output of this task.
+    #[must_use]
     pub fn discard<N>(self) -> Task<N>
     where
         M: Send + 'static,
@@ -114,7 +119,7 @@ impl<M> Task<M> {
         match self {
             Self::Iced(t) => Task::Iced(t.discard()),
             Self::LayerShell(cmd) => Task::LayerShell(cmd),
-            Self::Batch(tasks) => Task::Batch(tasks.into_iter().map(|t| t.discard()).collect()),
+            Self::Batch(tasks) => Task::Batch(tasks.into_iter().map(Task::discard).collect()),
         }
     }
 }
@@ -126,6 +131,7 @@ impl<M> From<iced_runtime::Task<M>> for Task<M> {
 }
 
 /// Create a new layer shell surface. Returns the assigned ID and a task.
+#[must_use]
 pub fn new_layer_surface<M>(settings: LayerShellSettings) -> (SurfaceId, Task<M>) {
     let id = SurfaceId::unique();
     (
@@ -135,36 +141,43 @@ pub fn new_layer_surface<M>(settings: LayerShellSettings) -> (SurfaceId, Task<M>
 }
 
 /// Destroy a layer shell surface.
+#[must_use]
 pub fn destroy_layer_surface<M>(id: SurfaceId) -> Task<M> {
     Task::LayerShell(LayerShellCommand::DestroySurface(id))
 }
 
 /// Change the anchor of a surface.
+#[must_use]
 pub fn set_anchor<M>(id: SurfaceId, anchor: Anchor) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetAnchor(id, anchor))
 }
 
 /// Change the layer of a surface.
+#[must_use]
 pub fn set_layer<M>(id: SurfaceId, layer: Layer) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetLayer(id, layer))
 }
 
 /// Change the exclusive zone of a surface.
+#[must_use]
 pub fn set_exclusive_zone<M>(id: SurfaceId, zone: i32) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetExclusiveZone(id, zone))
 }
 
 /// Change the keyboard interactivity of a surface.
+#[must_use]
 pub fn set_keyboard_interactivity<M>(id: SurfaceId, ki: KeyboardInteractivity) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetKeyboardInteractivity(id, ki))
 }
 
 /// Change the size of a surface.
+#[must_use]
 pub fn set_size<M>(id: SurfaceId, size: (u32, u32)) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetSize(id, size))
 }
 
 /// Change the margin of a surface.
+#[must_use]
 pub fn set_margin<M>(id: SurfaceId, margin: (i32, i32, i32, i32)) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetMargin(id, margin))
 }

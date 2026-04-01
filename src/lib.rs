@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 mod application;
 mod conversion;
 mod error;
