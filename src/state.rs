@@ -8,30 +8,24 @@ use raw_window_handle::{
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
 };
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
-use smithay_client_toolkit::data_device_manager::data_device::{
-    DataDevice, DataDeviceHandler,
-};
-use smithay_client_toolkit::data_device_manager::data_offer::{
-    DataOfferHandler, DragOffer,
-};
-use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
+use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler;
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::delegate_data_device;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, KeyboardHandler, Modifiers};
+use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use smithay_client_toolkit::seat::touch::TouchHandler;
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
-use smithay_client_toolkit::shell::wlr_layer::{
-    LayerShell, LayerShellHandler, LayerSurface,
-};
 use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerShellHandler, LayerSurface};
 use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_touch,
 };
-use smithay_client_toolkit::seat::touch::TouchHandler;
 use wayland_client::Proxy;
 use wayland_client::protocol::wl_data_device::WlDataDevice;
 use wayland_client::protocol::wl_data_source::WlDataSource;
@@ -108,6 +102,7 @@ pub(crate) struct WaylandState {
 }
 
 impl WaylandState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: RegistryState,
         compositor: CompositorState,
@@ -150,11 +145,7 @@ impl WaylandState {
         }
     }
 
-    pub fn register_surface(
-        &mut self,
-        id: SurfaceId,
-        layer_surface: LayerSurface,
-    ) {
+    pub fn register_surface(&mut self, id: SurfaceId, layer_surface: LayerSurface) {
         let wl_surface = layer_surface.wl_surface().clone();
         self.surfaces.insert(
             wl_surface.clone(),
@@ -185,8 +176,12 @@ impl WaylandState {
         }
         self.current_mouse_interaction = interaction;
 
-        let Some(manager) = &self.cursor_shape_manager else { return };
-        let Some(pointer) = &self.wl_pointer else { return };
+        let Some(manager) = &self.cursor_shape_manager else {
+            return;
+        };
+        let Some(pointer) = &self.wl_pointer else {
+            return;
+        };
 
         use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
@@ -222,10 +217,7 @@ unsafe impl Send for WaylandWindow {}
 unsafe impl Sync for WaylandWindow {}
 
 impl WaylandWindow {
-    pub fn new(
-        display_ptr: *mut std::ffi::c_void,
-        surface: &WlSurface,
-    ) -> Option<Self> {
+    pub fn new(display_ptr: *mut std::ffi::c_void, surface: &WlSurface) -> Option<Self> {
         let display = NonNull::new(display_ptr)?;
         let surface_ptr = Proxy::id(surface).as_ptr() as *mut std::ffi::c_void;
         let surface = NonNull::new(surface_ptr)?;
@@ -253,7 +245,11 @@ impl HasWindowHandle for WaylandWindow {
 
 // --- Key event helpers ---
 
-fn make_key_pressed(event: &KeyEvent, modifiers: iced_core::keyboard::Modifiers, repeat: bool) -> iced_core::Event {
+fn make_key_pressed(
+    event: &KeyEvent,
+    modifiers: iced_core::keyboard::Modifiers,
+    repeat: bool,
+) -> iced_core::Event {
     let key = crate::conversion::keysym_to_iced_key(event.keysym);
     iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
         key: key.clone(),
@@ -266,7 +262,10 @@ fn make_key_pressed(event: &KeyEvent, modifiers: iced_core::keyboard::Modifiers,
     })
 }
 
-fn make_key_released(event: &KeyEvent, modifiers: iced_core::keyboard::Modifiers) -> iced_core::Event {
+fn make_key_released(
+    event: &KeyEvent,
+    modifiers: iced_core::keyboard::Modifiers,
+) -> iced_core::Event {
     let key = crate::conversion::keysym_to_iced_key(event.keysym);
     iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyReleased {
         key: key.clone(),
@@ -342,12 +341,7 @@ impl CompositorHandler for WaylandState {
 }
 
 impl LayerShellHandler for WaylandState {
-    fn closed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
-    ) {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         let wl_surface = layer.wl_surface();
         if let Some(data) = self.surfaces.get(wl_surface) {
             self.closed_surfaces.push(data.id);
@@ -380,13 +374,7 @@ impl SeatHandler for WaylandState {
         &mut self.seat
     }
 
-    fn new_seat(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _seat: WlSeat,
-    ) {
-    }
+    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: WlSeat) {}
 
     fn new_capability(
         &mut self,
@@ -414,9 +402,7 @@ impl SeatHandler for WaylandState {
                     )
                     .ok();
                 if self.data_device.is_none() {
-                    self.data_device = Some(
-                        self.data_device_manager.get_data_device(qh, &seat),
-                    );
+                    self.data_device = Some(self.data_device_manager.get_data_device(qh, &seat));
                 }
             }
             Capability::Pointer => {
@@ -450,13 +436,7 @@ impl SeatHandler for WaylandState {
         }
     }
 
-    fn remove_seat(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _seat: WlSeat,
-    ) {
-    }
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: WlSeat) {}
 }
 
 impl KeyboardHandler for WaylandState {
@@ -493,10 +473,8 @@ impl KeyboardHandler for WaylandState {
         event: KeyEvent,
     ) {
         if let Some(surface_id) = self.keyboard_focus {
-            self.pending_events.push((
-                surface_id,
-                make_key_pressed(&event, self.modifiers, false),
-            ));
+            self.pending_events
+                .push((surface_id, make_key_pressed(&event, self.modifiers, false)));
         }
     }
 
@@ -509,10 +487,8 @@ impl KeyboardHandler for WaylandState {
         event: KeyEvent,
     ) {
         if let Some(surface_id) = self.keyboard_focus {
-            self.pending_events.push((
-                surface_id,
-                make_key_released(&event, self.modifiers),
-            ));
+            self.pending_events
+                .push((surface_id, make_key_released(&event, self.modifiers)));
         }
     }
 
@@ -569,10 +545,8 @@ impl PointerHandler for WaylandState {
                 PointerEventKind::Enter { serial, .. } => {
                     self.pointer_enter_serial = serial;
                     self.pointer_surface = Some(surface_id);
-                    self.cursor_position = iced_core::Point::new(
-                        event.position.0 as f32,
-                        event.position.1 as f32,
-                    );
+                    self.cursor_position =
+                        iced_core::Point::new(event.position.0 as f32, event.position.1 as f32);
                     self.pending_events.push((
                         surface_id,
                         iced_core::Event::Mouse(iced_core::mouse::Event::CursorEntered),
@@ -586,10 +560,8 @@ impl PointerHandler for WaylandState {
                     ));
                 }
                 PointerEventKind::Motion { .. } => {
-                    self.cursor_position = iced_core::Point::new(
-                        event.position.0 as f32,
-                        event.position.1 as f32,
-                    );
+                    self.cursor_position =
+                        iced_core::Point::new(event.position.0 as f32, event.position.1 as f32);
                     self.pending_events.push((
                         surface_id,
                         iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved {
@@ -620,7 +592,8 @@ impl PointerHandler for WaylandState {
                 } => {
                     // If the compositor signals Inverted (natural scrolling),
                     // the delta is already in content-scroll direction — don't negate.
-                    let inverted = matches!(
+                    let inverted =
+                        matches!(
                         horizontal.relative_direction.or(vertical.relative_direction),
                         Some(wayland_client::protocol::wl_pointer::AxisRelativeDirection::Inverted)
                     );
@@ -644,9 +617,7 @@ impl PointerHandler for WaylandState {
                     };
                     self.pending_events.push((
                         surface_id,
-                        iced_core::Event::Mouse(iced_core::mouse::Event::WheelScrolled {
-                            delta,
-                        }),
+                        iced_core::Event::Mouse(iced_core::mouse::Event::WheelScrolled { delta }),
                     ));
                 }
             }
@@ -659,12 +630,7 @@ impl OutputHandler for WaylandState {
         &mut self.output
     }
 
-    fn new_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: WlOutput,
-    ) {
+    fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
         let id = self.allocate_output_id();
         let sctk_info = self.output.info(&output);
         let info = OutputInfo {
@@ -690,12 +656,7 @@ impl OutputHandler for WaylandState {
         self.outputs.insert(output, info);
     }
 
-    fn update_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: WlOutput,
-    ) {
+    fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
         if let Some(existing) = self.outputs.get_mut(&output) {
             let sctk_info = self.output.info(&output);
             if let Some(si) = sctk_info {
@@ -710,12 +671,7 @@ impl OutputHandler for WaylandState {
         }
     }
 
-    fn output_destroyed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: WlOutput,
-    ) {
+    fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
         if let Some(info) = self.outputs.remove(&output) {
             self.output_events.push(OutputEvent::Removed(info.id));
         }
@@ -734,65 +690,106 @@ impl ProvidesRegistryState for WaylandState {
 
 impl DataDeviceHandler for WaylandState {
     fn enter(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice, _x: f64, _y: f64, _surface: &WlSurface,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+        _surface: &WlSurface,
+    ) {
+    }
 
     fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {}
 
     fn motion(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice, _x: f64, _y: f64,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+    ) {
+    }
 
     fn selection(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+    }
 
     fn drop_performed(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+    }
 }
 
 impl DataOfferHandler for WaylandState {
     fn source_actions(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _offer: &mut DragOffer, _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+    }
 
     fn selected_action(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _offer: &mut DragOffer, _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+    }
 }
 
 impl DataSourceHandler for WaylandState {
     fn accept_mime(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _source: &WlDataSource, _mime: Option<String>,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: Option<String>,
+    ) {
+    }
 
     fn send_request(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _source: &WlDataSource, _mime: String, _fd: WritePipe,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: String,
+        _fd: WritePipe,
+    ) {
+    }
 
-    fn cancelled(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource,
-    ) {}
+    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {}
 
-    fn dnd_dropped(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource,
-    ) {}
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+    }
 
     fn dnd_finished(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+    ) {
+    }
 
     fn action(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _source: &WlDataSource, _action: wayland_client::protocol::wl_data_device_manager::DndAction,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _action: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+    }
 }
 
 delegate_compositor!(WaylandState);
@@ -802,8 +799,15 @@ delegate_output!(WaylandState);
 delegate_registry!(WaylandState);
 impl TouchHandler for WaylandState {
     fn down(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        _serial: u32, _time: u32, surface: WlSurface, id: i32, position: (f64, f64),
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &WlTouch,
+        _serial: u32,
+        _time: u32,
+        surface: WlSurface,
+        id: i32,
+        position: (f64, f64),
     ) {
         if let Some(surface_id) = self.surface_id_for(&surface) {
             let pos = iced_core::Point::new(position.0 as f32, position.1 as f32);
@@ -819,8 +823,13 @@ impl TouchHandler for WaylandState {
     }
 
     fn up(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        _serial: u32, _time: u32, id: i32,
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &WlTouch,
+        _serial: u32,
+        _time: u32,
+        id: i32,
     ) {
         if let Some((surface_id, pos)) = self.touch_fingers.remove(&id) {
             self.pending_events.push((
@@ -834,8 +843,13 @@ impl TouchHandler for WaylandState {
     }
 
     fn motion(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        _time: u32, id: i32, position: (f64, f64),
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &WlTouch,
+        _time: u32,
+        id: i32,
+        position: (f64, f64),
     ) {
         let pos = iced_core::Point::new(position.0 as f32, position.1 as f32);
         if let Some((surface_id, stored_pos)) = self.touch_fingers.get_mut(&id) {
@@ -863,14 +877,25 @@ impl TouchHandler for WaylandState {
     }
 
     fn shape(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        _id: i32, _major: f64, _minor: f64,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &WlTouch,
+        _id: i32,
+        _major: f64,
+        _minor: f64,
+    ) {
+    }
 
     fn orientation(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        _id: i32, _orientation: f64,
-    ) {}
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &WlTouch,
+        _id: i32,
+        _orientation: f64,
+    ) {
+    }
 }
 
 delegate_seat!(WaylandState);

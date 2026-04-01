@@ -11,32 +11,33 @@ use calloop_wayland_source::WaylandSource;
 use futures::{Sink, StreamExt, channel::mpsc};
 use iced_core::mouse;
 use iced_core::{Font, Size, Theme};
-use iced_graphics::compositor::Compositor as _;
 use iced_graphics::Viewport;
+use iced_graphics::compositor::Compositor as _;
 use iced_renderer::Compositor;
-use iced_runtime::user_interface::{self, UserInterface};
 use iced_runtime::Action;
+use iced_runtime::user_interface::{self, UserInterface};
 use smithay_client_toolkit::compositor::CompositorState;
 use smithay_client_toolkit::data_device_manager::DataDeviceManagerState;
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
-use smithay_client_toolkit::shell::wlr_layer::LayerShell;
 use smithay_client_toolkit::shell::WaylandSurface;
-use wayland_client::globals::registry_queue_init;
+use smithay_client_toolkit::shell::wlr_layer::LayerShell;
 use wayland_client::Connection;
+use wayland_client::globals::registry_queue_init;
 
-use crate::wayland_clipboard::WaylandClipboard;
 use crate::error::Error;
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::{WaylandState, WaylandWindow};
 use crate::task_impl::{LayerShellCommand, Task};
+use crate::wayland_clipboard::WaylandClipboard;
 
 type Element<'a, M> = iced_core::Element<'a, M, Theme, iced_renderer::Renderer>;
 
 /// Builder for a layer shell application.
 ///
 /// Created via [`application()`], configured with builder methods, then started with [`run()`](Self::run).
+#[allow(clippy::type_complexity)]
 pub struct Application<State, Message> {
     boot: Box<dyn FnOnce() -> (State, Task<Message>)>,
     update: Box<dyn Fn(&mut State, Message) -> Task<Message>>,
@@ -153,7 +154,10 @@ struct WakeupSender<M> {
 
 impl<M> Clone for WakeupSender<M> {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone(), ping: self.ping.clone() }
+        Self {
+            inner: self.inner.clone(),
+            ping: self.ping.clone(),
+        }
     }
 }
 
@@ -208,12 +212,12 @@ where
     let output_state = OutputState::new(&globals, &qh);
     let registry_state = RegistryState::new(&globals);
     let data_device_manager =
-        DataDeviceManagerState::bind(&globals, &qh)
-            .map_err(|e| Error::EventLoop(e.to_string()))?;
+        DataDeviceManagerState::bind(&globals, &qh).map_err(|e| Error::EventLoop(e.to_string()))?;
     let cursor_shape_manager =
         smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager::bind(
             &globals, &qh,
-        ).ok();
+        )
+        .ok();
 
     // Create calloop event loop early so we can pass the LoopHandle to
     // keyboard with repeat (new_capability fires during roundtrip)
@@ -257,7 +261,7 @@ where
     if !wl_state
         .surfaces
         .get(&main_wl)
-        .map_or(false, |d| d.configured)
+        .is_some_and(|d| d.configured)
     {
         event_queue
             .roundtrip(&mut wl_state)
@@ -268,8 +272,10 @@ where
     let monitor_scale = main_data.scale_factor.max(1) as u32;
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
         // Convert surface-local to physical pixels
-        (main_data.size.0 * monitor_scale.max(1),
-         main_data.size.1 * monitor_scale.max(1))
+        (
+            main_data.size.0 * monitor_scale.max(1),
+            main_data.size.1 * monitor_scale.max(1),
+        )
     } else {
         (800, 30)
     };
@@ -310,10 +316,7 @@ where
         SurfaceId::MAIN,
         IcedSurface {
             surface: compositor.create_surface(window_handle, width, height),
-            viewport: Viewport::with_physical_size(
-                Size::new(width, height),
-                initial_scale,
-            ),
+            viewport: Viewport::with_physical_size(Size::new(width, height), initial_scale),
             needs_redraw: true,
             cache: None,
         },
@@ -321,10 +324,13 @@ where
 
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
-    let (ping, ping_source) = calloop::ping::make_ping()
-        .map_err(|e| Error::EventLoop(e.to_string()))?;
+    let (ping, ping_source) =
+        calloop::ping::make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
     let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Action<Message>>();
-    let wakeup_sender = WakeupSender { inner: runtime_sender, ping: ping.clone() };
+    let wakeup_sender = WakeupSender {
+        inner: runtime_sender,
+        ping: ping.clone(),
+    };
     let mut runtime = iced_futures::Runtime::new(executor, wakeup_sender);
     let exit_flag = Arc::new(AtomicBool::new(false));
 
@@ -332,7 +338,15 @@ where
 
     // Process boot task
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
-    process_task(boot_task, &mut wl_state, &mut runtime, &mut pending_creations, &qh, &exit_flag, &ping);
+    process_task(
+        boot_task,
+        &mut wl_state,
+        &mut runtime,
+        &mut pending_creations,
+        &qh,
+        &exit_flag,
+        &ping,
+    );
 
     // Create surfaces requested during boot
     for (id, settings) in pending_creations.drain(..) {
@@ -354,7 +368,8 @@ where
     // Create iced rendering surfaces for everything registered
     sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, 1.0);
 
-    event_loop.handle()
+    event_loop
+        .handle()
         .insert_source(ping_source, |_, _, _| {})
         .map_err(|e| Error::EventLoop(e.to_string()))?;
     WaylandSource::new(conn, event_queue)
@@ -363,9 +378,12 @@ where
 
     let mut running = true;
 
-    let mut user_interfaces = ManuallyDrop::new(
-        build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
-    );
+    let mut user_interfaces = ManuallyDrop::new(build_user_interfaces(
+        &app.view,
+        &user_state,
+        &mut iced_surfaces,
+        &mut renderer,
+    ));
 
     let mut runtime_messages: Vec<Message> = Vec::new();
     let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
@@ -408,25 +426,24 @@ where
             if wl_state.keyboard_focus == Some(closed_id) {
                 wl_state.keyboard_focus = None;
             }
-            wl_state.touch_fingers.retain(|_, (sid, _)| *sid != closed_id);
+            wl_state
+                .touch_fingers
+                .retain(|_, (sid, _)| *sid != closed_id);
         }
 
         runtime_messages.clear();
-        loop {
-            match runtime_receiver.try_recv() {
-                Ok(action) => run_action(
-                    action,
-                    &mut runtime_messages,
-                    &mut clipboard,
-                    &mut user_interfaces,
-                    &mut renderer,
-                    &mut compositor,
-                    &mut iced_surfaces,
-                    &exit_flag,
-                    &ping,
-                ),
-                _ => break,
-            }
+        while let Ok(action) = runtime_receiver.try_recv() {
+            run_action(
+                action,
+                &mut runtime_messages,
+                &mut clipboard,
+                &mut user_interfaces,
+                &mut renderer,
+                &mut compositor,
+                &mut iced_surfaces,
+                &exit_flag,
+                &ping,
+            );
         }
 
         if let Some(ref sub_fn) = app.subscription_fn {
@@ -437,12 +454,9 @@ where
 
         crate::output_subscription::push_events(mem::take(&mut wl_state.output_events));
 
-        let app_scale = app
-            .scale_factor_fn
-            .as_ref()
-            .map_or(1.0, |f| f(&user_state)) as f32;
+        let app_scale = app.scale_factor_fn.as_ref().map_or(1.0, |f| f(&user_state)) as f32;
 
-        for (_wl, data) in &wl_state.surfaces {
+        for data in wl_state.surfaces.values() {
             if let Some(iced) = iced_surfaces.get_mut(&data.id) {
                 let (sw, sh) = data.size;
                 if sw > 0 && sh > 0 {
@@ -471,16 +485,36 @@ where
         surface_events.clear();
         for (sid, event) in pending_events {
             let event = match event {
-                iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved { position }) =>
-                    iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved { position: scale(position) }),
-                iced_core::Event::Touch(iced_core::touch::Event::FingerPressed { id, position }) =>
-                    iced_core::Event::Touch(iced_core::touch::Event::FingerPressed { id, position: scale(position) }),
-                iced_core::Event::Touch(iced_core::touch::Event::FingerMoved { id, position }) =>
-                    iced_core::Event::Touch(iced_core::touch::Event::FingerMoved { id, position: scale(position) }),
-                iced_core::Event::Touch(iced_core::touch::Event::FingerLifted { id, position }) =>
-                    iced_core::Event::Touch(iced_core::touch::Event::FingerLifted { id, position: scale(position) }),
-                iced_core::Event::Touch(iced_core::touch::Event::FingerLost { id, position }) =>
-                    iced_core::Event::Touch(iced_core::touch::Event::FingerLost { id, position: scale(position) }),
+                iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved { position }) => {
+                    iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved {
+                        position: scale(position),
+                    })
+                }
+                iced_core::Event::Touch(iced_core::touch::Event::FingerPressed {
+                    id,
+                    position,
+                }) => iced_core::Event::Touch(iced_core::touch::Event::FingerPressed {
+                    id,
+                    position: scale(position),
+                }),
+                iced_core::Event::Touch(iced_core::touch::Event::FingerMoved { id, position }) => {
+                    iced_core::Event::Touch(iced_core::touch::Event::FingerMoved {
+                        id,
+                        position: scale(position),
+                    })
+                }
+                iced_core::Event::Touch(iced_core::touch::Event::FingerLifted { id, position }) => {
+                    iced_core::Event::Touch(iced_core::touch::Event::FingerLifted {
+                        id,
+                        position: scale(position),
+                    })
+                }
+                iced_core::Event::Touch(iced_core::touch::Event::FingerLost { id, position }) => {
+                    iced_core::Event::Touch(iced_core::touch::Event::FingerLost {
+                        id,
+                        position: scale(position),
+                    })
+                }
                 other => other,
             };
             surface_events.entry(sid).or_default().push(event);
@@ -492,7 +526,7 @@ where
             .map_or(Theme::CatppuccinMocha, |f| f(&user_state));
 
         all_messages.clear();
-        all_messages.extend(runtime_messages.drain(..));
+        all_messages.append(&mut runtime_messages);
         let has_runtime_messages = !all_messages.is_empty();
 
         // Update persistent UIs with pending events
@@ -511,24 +545,33 @@ where
 
             let cursor = if wl_state.pointer_surface == Some(*surface_id) {
                 let pos = wl_state.cursor_position;
-                mouse::Cursor::Available(iced_core::Point::new(pos.x / app_scale, pos.y / app_scale))
+                mouse::Cursor::Available(iced_core::Point::new(
+                    pos.x / app_scale,
+                    pos.y / app_scale,
+                ))
             } else {
                 mouse::Cursor::Unavailable
             };
 
             let (ui_state, _statuses) = ui.update(
-                &events, cursor, &mut renderer, &mut clipboard, &mut all_messages,
+                &events,
+                cursor,
+                &mut renderer,
+                &mut clipboard,
+                &mut all_messages,
             );
 
             match ui_state {
                 iced_runtime::user_interface::State::Updated {
-                    redraw_request, mouse_interaction, ..
+                    redraw_request,
+                    mouse_interaction,
+                    ..
                 } => {
                     wl_state.set_cursor_shape(mouse_interaction, &qh);
-                    if !matches!(redraw_request, iced_core::window::RedrawRequest::Wait) {
-                        if let Some(s) = iced_surfaces.get_mut(surface_id) {
-                            s.needs_redraw = true;
-                        }
+                    if !matches!(redraw_request, iced_core::window::RedrawRequest::Wait)
+                        && let Some(s) = iced_surfaces.get_mut(surface_id)
+                    {
+                        s.needs_redraw = true;
                     }
                 }
                 iced_runtime::user_interface::State::Outdated => {
@@ -550,7 +593,15 @@ where
 
             for message in all_messages.drain(..) {
                 let task = (app.update)(&mut user_state, message);
-                process_task(task, &mut wl_state, &mut runtime, &mut pending_creations, &qh, &exit_flag, &ping);
+                process_task(
+                    task,
+                    &mut wl_state,
+                    &mut runtime,
+                    &mut pending_creations,
+                    &qh,
+                    &exit_flag,
+                    &ping,
+                );
             }
 
             // Restore caches into iced_surfaces for rebuild
@@ -561,25 +612,42 @@ where
             }
 
             // Rebuild all UIs with new state
-            user_interfaces = ManuallyDrop::new(
-                build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
-            );
+            user_interfaces = ManuallyDrop::new(build_user_interfaces(
+                &app.view,
+                &user_state,
+                &mut iced_surfaces,
+                &mut renderer,
+            ));
         }
 
         // Create newly requested surfaces
         for (id, settings) in pending_creations.drain(..) {
-            let layer = create_layer_surface(&wl_state.compositor, &wl_state.layer_shell, &qh, &settings, &wl_state);
+            let layer = create_layer_surface(
+                &wl_state.compositor,
+                &wl_state.layer_shell,
+                &qh,
+                &settings,
+                &wl_state,
+            );
             wl_state.register_surface(id, layer);
         }
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
         // Build UIs for newly created surfaces
         {
-            let new_ids: Vec<SurfaceId> = iced_surfaces.keys()
+            let new_ids: Vec<SurfaceId> = iced_surfaces
+                .keys()
                 .filter(|id| !user_interfaces.contains_key(id))
-                .copied().collect();
+                .copied()
+                .collect();
             for id in new_ids {
-                let ui = build_single_ui(&*app.view, &user_state, id, &mut iced_surfaces, &mut renderer);
+                let ui = build_single_ui(
+                    &*app.view,
+                    &user_state,
+                    id,
+                    &mut iced_surfaces,
+                    &mut renderer,
+                );
                 user_interfaces.insert(id, ui);
             }
         }
@@ -589,7 +657,10 @@ where
         surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
             let iced_s = match iced_surfaces.get_mut(surface_id) {
-                Some(s) if s.needs_redraw => { s.needs_redraw = false; s }
+                Some(s) if s.needs_redraw => {
+                    s.needs_redraw = false;
+                    s
+                }
                 _ => continue,
             };
 
@@ -609,7 +680,10 @@ where
 
             let cursor = if wl_state.pointer_surface == Some(*surface_id) {
                 let pos = wl_state.cursor_position;
-                mouse::Cursor::Available(iced_core::Point::new(pos.x / app_scale, pos.y / app_scale))
+                mouse::Cursor::Available(iced_core::Point::new(
+                    pos.x / app_scale,
+                    pos.y / app_scale,
+                ))
             } else {
                 mouse::Cursor::Unavailable
             };
@@ -619,11 +693,22 @@ where
                 iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
             )];
             discard.clear();
-            ui.update(&redraw_event, cursor, &mut renderer, &mut clipboard, &mut discard);
-            debug_assert!(discard.is_empty(), "RedrawRequested should not produce messages");
+            ui.update(
+                &redraw_event,
+                cursor,
+                &mut renderer,
+                &mut clipboard,
+                &mut discard,
+            );
+            debug_assert!(
+                discard.is_empty(),
+                "RedrawRequested should not produce messages"
+            );
 
             // Draw
-            let style = iced_core::renderer::Style { text_color: theme.palette().text };
+            let style = iced_core::renderer::Style {
+                text_color: theme.palette().text,
+            };
             ui.draw(&mut renderer, &theme, &style, cursor);
 
             // Present
@@ -635,14 +720,23 @@ where
                 wl_surf.frame(&qh, wl_surf.clone());
                 data.frame_pending = true;
 
-                match compositor.present(&mut renderer, &mut iced_s.surface, &iced_s.viewport, bg, || {}) {
+                match compositor.present(
+                    &mut renderer,
+                    &mut iced_s.surface,
+                    &iced_s.viewport,
+                    bg,
+                    || {},
+                ) {
                     Ok(()) => {}
-                    Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => { running = false; }
-                    Err(_) => { data.frame_pending = false; }
+                    Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => {
+                        running = false;
+                    }
+                    Err(_) => {
+                        data.frame_pending = false;
+                    }
                 }
             }
         }
-
     }
 
     Ok(())
@@ -650,7 +744,10 @@ where
 
 /// Build a single UserInterface for a surface.
 fn build_single_ui<'a, State, Message: 'a>(
-    view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
+    view: &dyn for<'v> Fn(
+        &'v State,
+        SurfaceId,
+    ) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
     user_state: &'a State,
     id: SurfaceId,
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
@@ -665,23 +762,35 @@ fn build_single_ui<'a, State, Message: 'a>(
 
 /// Build a [`UserInterface`] for every registered surface.
 fn build_user_interfaces<'a, State, Message: 'a>(
-    view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
+    view: &dyn for<'v> Fn(
+        &'v State,
+        SurfaceId,
+    ) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
     user_state: &'a State,
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
     renderer: &mut iced_renderer::Renderer,
 ) -> HashMap<SurfaceId, UserInterface<'a, Message, Theme, iced_renderer::Renderer>> {
     let ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
     ids.into_iter()
-        .map(|id| (id, build_single_ui(view, user_state, id, iced_surfaces, renderer)))
+        .map(|id| {
+            (
+                id,
+                build_single_ui(view, user_state, id, iced_surfaces, renderer),
+            )
+        })
         .collect()
 }
 
 /// Process a single runtime Action synchronously on the main loop.
+#[allow(clippy::too_many_arguments)]
 fn run_action<Message: std::fmt::Debug>(
     action: Action<Message>,
     messages: &mut Vec<Message>,
     clipboard: &mut WaylandClipboard,
-    user_interfaces: &mut HashMap<SurfaceId, UserInterface<'_, Message, Theme, iced_renderer::Renderer>>,
+    user_interfaces: &mut HashMap<
+        SurfaceId,
+        UserInterface<'_, Message, Theme, iced_renderer::Renderer>,
+    >,
     renderer: &mut iced_renderer::Renderer,
     compositor: &mut Compositor,
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
@@ -704,19 +813,17 @@ fn run_action<Message: std::fmt::Debug>(
                 }
             }
         }
-        Action::Widget(mut operation) => {
-            loop {
-                for ui in user_interfaces.values_mut() {
-                    ui.operate(renderer, operation.as_mut());
-                }
-                match operation.finish() {
-                    iced_core::widget::operation::Outcome::Chain(next) => {
-                        operation = next;
-                    }
-                    _ => break,
-                }
+        Action::Widget(mut operation) => loop {
+            for ui in user_interfaces.values_mut() {
+                ui.operate(renderer, operation.as_mut());
             }
-        }
+            match operation.finish() {
+                iced_core::widget::operation::Outcome::Chain(next) => {
+                    operation = next;
+                }
+                _ => break,
+            }
+        },
         Action::LoadFont { bytes, channel } => {
             compositor.load_font(bytes);
             let _ = channel.send(Ok(()));
@@ -795,62 +902,63 @@ fn apply_layer_shell_command(
             state.closed_surfaces.push(id);
         }
         LayerShellCommand::SetAnchor(id, anchor) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get(wl) {
-                    data.layer_surface.set_anchor(anchor.to_sctk());
-                    data.layer_surface.wl_surface().commit();
-                }
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                data.layer_surface.set_anchor(anchor.to_sctk());
+                data.layer_surface.wl_surface().commit();
             }
         }
         LayerShellCommand::SetLayer(id, layer) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get(wl) {
-                    data.layer_surface.set_layer(layer.to_sctk());
-                    let wl_surf = data.layer_surface.wl_surface();
-                    // When hiding (Background), set empty input region so it
-                    // doesn't intercept clicks meant for surfaces above it.
-                    if layer == crate::settings::Layer::Background {
-                        if let Ok(empty) = smithay_client_toolkit::compositor::Region::new(&state.compositor) {
-                            wl_surf.set_input_region(Some(empty.wl_region()));
-                        }
-                    } else {
-                        wl_surf.set_input_region(None);
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                data.layer_surface.set_layer(layer.to_sctk());
+                let wl_surf = data.layer_surface.wl_surface();
+                // When hiding (Background), set empty input region so it
+                // doesn't intercept clicks meant for surfaces above it.
+                if layer == crate::settings::Layer::Background {
+                    if let Ok(empty) =
+                        smithay_client_toolkit::compositor::Region::new(&state.compositor)
+                    {
+                        wl_surf.set_input_region(Some(empty.wl_region()));
                     }
-                    wl_surf.commit();
+                } else {
+                    wl_surf.set_input_region(None);
                 }
+                wl_surf.commit();
             }
         }
         LayerShellCommand::SetExclusiveZone(id, zone) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get(wl) {
-                    data.layer_surface.set_exclusive_zone(zone);
-                    data.layer_surface.wl_surface().commit();
-                }
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                data.layer_surface.set_exclusive_zone(zone);
+                data.layer_surface.wl_surface().commit();
             }
         }
         LayerShellCommand::SetKeyboardInteractivity(id, ki) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get(wl) {
-                    data.layer_surface
-                        .set_keyboard_interactivity(ki.to_sctk());
-                    data.layer_surface.wl_surface().commit();
-                }
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                data.layer_surface.set_keyboard_interactivity(ki.to_sctk());
+                data.layer_surface.wl_surface().commit();
             }
         }
         LayerShellCommand::SetSize(id, (w, h)) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get_mut(wl) {
-                    data.layer_surface.set_size(w, h);
-                    data.layer_surface.wl_surface().commit();
-                }
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get_mut(wl)
+            {
+                data.layer_surface.set_size(w, h);
+                data.layer_surface.wl_surface().commit();
             }
         }
         LayerShellCommand::SetMargin(id, (top, right, bottom, left)) => {
-            if let Some(wl) = state.surface_id_map.get(&id) {
-                if let Some(data) = state.surfaces.get(wl) {
-                    data.layer_surface.set_margin(top, right, bottom, left);
-                    data.layer_surface.wl_surface().commit();
-                }
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                data.layer_surface.set_margin(top, right, bottom, left);
+                data.layer_surface.wl_surface().commit();
             }
         }
     }
@@ -896,17 +1004,26 @@ fn create_layer_surface(
 
     // Surfaces on Background layer start with empty input region
     // to avoid intercepting input meant for surfaces above them
-    if settings.layer == crate::settings::Layer::Background {
-        if let Ok(empty) = smithay_client_toolkit::compositor::Region::new(compositor_state) {
-            layer_surface.wl_surface().set_input_region(Some(empty.wl_region()));
-        }
+    if settings.layer == crate::settings::Layer::Background
+        && let Ok(empty) = smithay_client_toolkit::compositor::Region::new(compositor_state)
+    {
+        layer_surface
+            .wl_surface()
+            .set_input_region(Some(empty.wl_region()));
     }
 
     // Set buffer scale for HiDPI — matches the target output or first available
-    let scale = wl_output.as_ref()
+    let scale = wl_output
+        .as_ref()
         .and_then(|wo| wl_state.outputs.get(wo))
         .map(|info| info.scale_factor)
-        .or_else(|| wl_state.outputs.values().next().map(|info| info.scale_factor))
+        .or_else(|| {
+            wl_state
+                .outputs
+                .values()
+                .next()
+                .map(|info| info.scale_factor)
+        })
         .unwrap_or(1);
     if scale > 1 {
         layer_surface.wl_surface().set_buffer_scale(scale);
@@ -942,10 +1059,7 @@ fn sync_iced_surfaces(
                 data.id,
                 IcedSurface {
                     surface: compositor.create_surface(window, w, h),
-                    viewport: Viewport::with_physical_size(
-                        Size::new(w, h),
-                        combined_scale,
-                    ),
+                    viewport: Viewport::with_physical_size(Size::new(w, h), combined_scale),
                     cache: None,
                     needs_redraw: true,
                 },

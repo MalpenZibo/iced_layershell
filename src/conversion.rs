@@ -39,9 +39,7 @@ pub(crate) fn keysym_to_iced_key(keysym: Keysym) -> keyboard::Key {
     // This ensures Ctrl+C produces Key::Character("c"), not Key::Character("\x03").
     let raw = keysym.raw();
     if (0x20..=0x7e).contains(&raw) {
-        return keyboard::Key::Character(
-            String::from(char::from(raw as u8)).into(),
-        );
+        return keyboard::Key::Character(String::from(char::from(raw as u8)).into());
     }
     // For non-ASCII keysyms (e.g. accented characters), try xkb mapping
     if let Some(c) = keysym_to_char(raw) {

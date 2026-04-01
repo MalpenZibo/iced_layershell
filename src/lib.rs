@@ -1,10 +1,10 @@
 mod application;
-mod wayland_clipboard;
 mod conversion;
 mod error;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
+mod wayland_clipboard;
 // Internal task module (re-exported publicly via the `task` module below)
 #[path = "task.rs"]
 mod task_impl;
@@ -25,18 +25,18 @@ pub use task_impl::{
 // === Full iced public API re-export ===
 
 // Core types
+pub use Alignment::Center;
+pub use Length::{Fill, FillPortion, Shrink};
 pub use iced_core::{
     Alignment, Animation, Background, Border, Color, ContentFit, Degrees, Font, Gradient, Length,
     Padding, Pixels, Point, Radians, Rectangle, Rotation, Shadow, Size, Theme, Transformation,
     Vector,
 };
-pub use Alignment::Center;
-pub use Length::{Fill, FillPortion, Shrink};
 
 // Futures / streams
+pub use iced_futures::Subscription;
 pub use iced_futures::futures;
 pub use iced_futures::stream;
-pub use iced_futures::Subscription;
 
 // Renderer
 pub use iced_renderer::Renderer;
@@ -115,8 +115,8 @@ pub mod widget {
 
 pub mod task {
     pub use crate::task_impl::{
-        Task, destroy_layer_surface, new_layer_surface, set_anchor,
-        set_exclusive_zone, set_keyboard_interactivity, set_layer, set_margin, set_size,
+        Task, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
+        set_keyboard_interactivity, set_layer, set_margin, set_size,
     };
     pub use iced_runtime::task::Handle;
 }

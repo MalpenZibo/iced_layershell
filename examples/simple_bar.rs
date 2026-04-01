@@ -1,7 +1,6 @@
 use iced_layershell::{
     Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
-    Length, SurfaceId, Task, application, button, clipboard, container, row, text,
-    text_input,
+    Length, SurfaceId, Task, application, button, clipboard, container, row, text, text_input,
 };
 
 struct App {
@@ -63,14 +62,20 @@ fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
 
     container(
         row![
-            button(text(" - ").size(14)).on_press(Msg::Decrement).style(btn_style),
+            button(text(" - ").size(14))
+                .on_press(Msg::Decrement)
+                .style(btn_style),
             text(format!(" {} ", app.count)).size(16),
-            button(text(" + ").size(14)).on_press(Msg::Increment).style(btn_style),
+            button(text(" + ").size(14))
+                .on_press(Msg::Increment)
+                .style(btn_style),
             text_input("Type here...", &app.input_value)
                 .on_input(Msg::InputChanged)
                 .width(200),
             text(format!("Secret: {}", app.secret)).size(12),
-            button(text("Copy").size(12)).on_press(Msg::CopySecret).style(btn_style),
+            button(text("Copy").size(12))
+                .on_press(Msg::CopySecret)
+                .style(btn_style),
         ]
         .spacing(8)
         .align_y(Alignment::Center),

@@ -1,6 +1,4 @@
-use crate::settings::{
-    Anchor, KeyboardInteractivity, Layer, LayerShellSettings, SurfaceId,
-};
+use crate::settings::{Anchor, KeyboardInteractivity, Layer, LayerShellSettings, SurfaceId};
 
 /// A command to modify the layer shell state.
 #[derive(Debug, Clone)]
@@ -64,10 +62,7 @@ impl<M> Task<M> {
     }
 
     /// Map the output of this task with the given function.
-    pub fn map<N: Send + 'static>(
-        self,
-        f: impl Fn(M) -> N + Send + 'static + Clone,
-    ) -> Task<N>
+    pub fn map<N: Send + 'static>(self, f: impl Fn(M) -> N + Send + 'static + Clone) -> Task<N>
     where
         M: Send + 'static,
     {
@@ -119,9 +114,7 @@ impl<M> Task<M> {
         match self {
             Self::Iced(t) => Task::Iced(t.discard()),
             Self::LayerShell(cmd) => Task::LayerShell(cmd),
-            Self::Batch(tasks) => {
-                Task::Batch(tasks.into_iter().map(|t| t.discard()).collect())
-            }
+            Self::Batch(tasks) => Task::Batch(tasks.into_iter().map(|t| t.discard()).collect()),
         }
     }
 }
@@ -135,7 +128,10 @@ impl<M> From<iced_runtime::Task<M>> for Task<M> {
 /// Create a new layer shell surface. Returns the assigned ID and a task.
 pub fn new_layer_surface<M>(settings: LayerShellSettings) -> (SurfaceId, Task<M>) {
     let id = SurfaceId::unique();
-    (id, Task::LayerShell(LayerShellCommand::NewSurface(id, settings)))
+    (
+        id,
+        Task::LayerShell(LayerShellCommand::NewSurface(id, settings)),
+    )
 }
 
 /// Destroy a layer shell surface.
@@ -159,10 +155,7 @@ pub fn set_exclusive_zone<M>(id: SurfaceId, zone: i32) -> Task<M> {
 }
 
 /// Change the keyboard interactivity of a surface.
-pub fn set_keyboard_interactivity<M>(
-    id: SurfaceId,
-    ki: KeyboardInteractivity,
-) -> Task<M> {
+pub fn set_keyboard_interactivity<M>(id: SurfaceId, ki: KeyboardInteractivity) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetKeyboardInteractivity(id, ki))
 }
 
