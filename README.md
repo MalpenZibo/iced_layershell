@@ -1,6 +1,6 @@
 # iced_layershell
 
-> **Warning**: This library is not intended for general use. It is specifically built for [ashell](https://github.com/MalpenZibo/ashell) and will not accept feature requests or bug reports unrelated to ashell. If you need a general-purpose iced layer shell backend, consider [iced-layershell](https://github.com/waycrate/exwlshelleern) or the [pop-os/iced](https://github.com/pop-os/iced) fork.
+> **Warning**: This library is not intended for general use. It is specifically built for [ashell](https://github.com/MalpenZibo/ashell) and will not accept feature requests or bug reports unrelated to ashell. If you need a general-purpose iced layer shell backend, consider [iced-layershell](https://github.com/waycrate/exwlshelleventloop) or the [pop-os/iced](https://github.com/pop-os/iced) fork.
 
 Wayland [layer shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) backend for [iced](https://github.com/iced-rs/iced) 0.14. Built to power [ashell](https://github.com/MalpenZibo/ashell), a Wayland status bar.
 
