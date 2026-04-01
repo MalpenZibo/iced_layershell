@@ -1,5 +1,5 @@
-use iced_wayland_layer::widget::Column;
-use iced_wayland_layer::{
+use iced_layershell::widget::Column;
+use iced_layershell::{
     Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
     Length, SurfaceId, Task, application, button, container, destroy_layer_surface,
     new_layer_surface, row, text,
@@ -64,7 +64,7 @@ fn view(app: &App, id: SurfaceId) -> Element<'_, Msg> {
         container(
             row![
                 text(format!("Count: {}", app.count)).size(16),
-                iced_wayland_layer::widget::Space::new().width(Length::Fill),
+                iced_layershell::widget::Space::new().width(Length::Fill),
                 button("Menu").on_press(Msg::OpenMenu),
             ]
             .spacing(10)

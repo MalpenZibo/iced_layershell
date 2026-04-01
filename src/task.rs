@@ -63,6 +63,68 @@ impl<M> Task<M> {
             _ => Self::Batch(tasks),
         }
     }
+
+    /// Map the output of this task with the given function.
+    pub fn map<N: Send + 'static>(
+        self,
+        f: impl Fn(M) -> N + Send + 'static + Clone,
+    ) -> Task<N>
+    where
+        M: Send + 'static,
+    {
+        match self {
+            Self::Iced(t) => Task::Iced(t.map(f)),
+            Self::LayerShell(cmd) => Task::LayerShell(cmd),
+            Self::Batch(tasks) => {
+                Task::Batch(tasks.into_iter().map(|t| t.map(f.clone())).collect())
+            }
+        }
+    }
+
+    /// Make this task abortable. Returns the task and a handle to abort it.
+    pub fn abortable(self) -> (Self, iced_runtime::task::Handle)
+    where
+        M: Send + 'static,
+    {
+        match self {
+            Self::Iced(t) => {
+                let (t, handle) = t.abortable();
+                (Task::Iced(t), handle)
+            }
+            other => {
+                // LayerShell commands and batches can't be aborted;
+                // return a no-op handle
+                let (_, handle) = iced_runtime::Task::<M>::none().abortable();
+                (other, handle)
+            }
+        }
+    }
+
+    /// Chain another task after this one.
+    pub fn chain(self, task: Self) -> Self
+    where
+        M: Send + 'static,
+    {
+        match (self, task) {
+            (Self::Iced(a), Self::Iced(b)) => Task::Iced(a.chain(b)),
+            (a, b) => Task::Batch(vec![a, b]),
+        }
+    }
+
+    /// Discard the output of this task.
+    pub fn discard<N>(self) -> Task<N>
+    where
+        M: Send + 'static,
+        N: Send + 'static,
+    {
+        match self {
+            Self::Iced(t) => Task::Iced(t.discard()),
+            Self::LayerShell(cmd) => Task::LayerShell(cmd),
+            Self::Batch(tasks) => {
+                Task::Batch(tasks.into_iter().map(|t| t.discard()).collect())
+            }
+        }
+    }
 }
 
 impl<M> From<iced_runtime::Task<M>> for Task<M> {

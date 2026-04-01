@@ -1,13 +1,15 @@
 mod application;
-mod clipboard;
+mod wayland_clipboard;
 mod conversion;
 mod error;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
-mod task;
+// Internal task module (re-exported publicly via the `task` module below)
+#[path = "task.rs"]
+mod task_impl;
 
-// --- Our types ---
+// === Layer shell API ===
 pub use application::application;
 pub use error::Error;
 pub use output_subscription::output_events;
@@ -15,23 +17,140 @@ pub use settings::{
     Anchor, KeyboardInteractivity, Layer, LayerShellSettings, OutputEvent, OutputId, OutputInfo,
     SurfaceId,
 };
-pub use task::{
+pub use task_impl::{
     clipboard_write, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
-    set_keyboard_interactivity, set_layer, set_margin, set_size, Task,
+    set_keyboard_interactivity, set_layer, set_margin, set_size,
 };
 
-// --- Re-exports from iced ---
+// === Full iced public API re-export ===
+
+// Core types
 pub use iced_core::{
-    alignment, color, font, gradient, padding, Alignment, Border, Color, Font, Length, Padding,
-    Pixels, Point, Rectangle, Shadow, Size, Theme,
+    Alignment, Animation, Background, Border, Color, ContentFit, Degrees, Font, Gradient, Length,
+    Padding, Pixels, Point, Radians, Rectangle, Rotation, Shadow, Size, Theme, Transformation,
+    Vector,
 };
-pub use iced_core::{event::Event, keyboard, mouse, touch, window};
+pub use Alignment::Center;
+pub use Length::{Fill, FillPortion, Shrink};
+
+// Futures / streams
+pub use iced_futures::futures;
+pub use iced_futures::stream;
 pub use iced_futures::Subscription;
+
+// Renderer
 pub use iced_renderer::Renderer;
+
+// All widgets
 pub use iced_widget::*;
+
+// Our Task wrapper (re-exported from task module)
+pub use task::Task;
+
+// Core crate for advanced usage
+pub use iced_core as core;
+
+// --- Modules matching iced's public API ---
+
+pub mod alignment {
+    pub use iced_core::alignment::*;
+}
+
+pub mod animation {
+    pub use iced_core::animation::*;
+}
+
+pub mod border {
+    pub use iced_core::border::*;
+}
+
+pub mod gradient {
+    pub use iced_core::gradient::*;
+}
+
+pub mod padding {
+    pub use iced_core::padding::*;
+}
+
+pub mod theme {
+    pub use iced_core::theme::*;
+}
+
+pub mod font {
+    pub use iced_core::font::*;
+    pub use iced_runtime::font::*;
+}
+
+pub mod event {
+    pub use iced_core::event::{Event, Status};
+    pub use iced_futures::event::{listen, listen_raw, listen_with};
+}
+
+pub mod keyboard {
+    pub use iced_core::keyboard::key;
+    pub use iced_core::keyboard::{Event, Key, Location, Modifiers};
+    pub use iced_futures::keyboard::listen;
+}
+
+pub mod mouse {
+    pub use iced_core::mouse::{Button, Cursor, Event, Interaction, ScrollDelta};
+}
+
+pub mod touch {
+    pub use iced_core::touch::{Event, Finger};
+}
+
+pub mod window {
+    pub use iced_core::window::*;
+}
+
+pub mod overlay {
+    pub type Element<'a, Message, Theme = iced_core::Theme, Renderer = iced_renderer::Renderer> =
+        iced_core::overlay::Element<'a, Message, Theme, Renderer>;
+}
+
 pub mod widget {
     pub use iced_widget::*;
 }
 
+pub mod task {
+    pub use crate::task_impl::{
+        Task, clipboard_write, destroy_layer_surface, new_layer_surface, set_anchor,
+        set_exclusive_zone, set_keyboard_interactivity, set_layer, set_margin, set_size,
+    };
+    pub use iced_runtime::task::Handle;
+}
+
+pub mod id {
+    pub use iced_widget::Id;
+}
+
+pub mod time {
+    pub use iced_futures::backend::default::time::*;
+}
+
+pub mod clipboard {
+    pub use iced_runtime::clipboard::{read, read_primary, write, write_primary};
+}
+
+pub mod executor {
+    pub use iced_futures::Executor;
+    pub use iced_futures::backend::default::Executor as Default;
+}
+
+pub mod system {
+    pub use iced_runtime::system::{theme, theme_changes};
+}
+
+#[cfg(feature = "advanced")]
+pub mod advanced {
+    pub use iced_core::*;
+}
+
+#[cfg(feature = "highlighter")]
+pub use iced_highlighter as highlighter;
+
 /// A generic iced UI element.
 pub type Element<'a, Message> = iced_core::Element<'a, Message, Theme, Renderer>;
+
+pub type Result = std::result::Result<(), Error>;

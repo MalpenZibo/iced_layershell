@@ -1,4 +1,4 @@
-use iced_wayland_layer::{
+use iced_layershell::{
     Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
     Length, SurfaceId, Task, application, button, clipboard_write, container, row, text,
     text_input,
@@ -48,7 +48,7 @@ fn update(app: &mut App, msg: Msg) -> Task<Msg> {
 }
 
 fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
-    let btn_style = |_theme: &iced_wayland_layer::Theme, status: button::Status| match status {
+    let btn_style = |_theme: &iced_layershell::Theme, status: button::Status| match status {
         button::Status::Hovered => button::Style {
             background: Some(Color::from_rgb(0.4, 0.4, 0.7).into()),
             text_color: Color::WHITE,
