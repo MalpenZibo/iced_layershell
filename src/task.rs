@@ -13,7 +13,6 @@ pub enum LayerShellCommand {
     SetKeyboardInteractivity(SurfaceId, KeyboardInteractivity),
     SetSize(SurfaceId, (u32, u32)),
     SetMargin(SurfaceId, (i32, i32, i32, i32)),
-    ClipboardWrite(String),
 }
 
 /// A task that can be either a standard iced task or a layer shell command.
@@ -177,9 +176,4 @@ pub fn set_size<M>(id: SurfaceId, size: (u32, u32)) -> Task<M> {
 /// Change the margin of a surface.
 pub fn set_margin<M>(id: SurfaceId, margin: (i32, i32, i32, i32)) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetMargin(id, margin))
-}
-
-/// Write text to the system clipboard.
-pub fn clipboard_write<M>(contents: String) -> Task<M> {
-    Task::LayerShell(LayerShellCommand::ClipboardWrite(contents))
 }

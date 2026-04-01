@@ -1,6 +1,6 @@
 use iced_layershell::{
     Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
-    Length, SurfaceId, Task, application, button, clipboard_write, container, row, text,
+    Length, SurfaceId, Task, application, button, clipboard, container, row, text,
     text_input,
 };
 
@@ -43,7 +43,7 @@ fn update(app: &mut App, msg: Msg) -> Task<Msg> {
             app.input_value = value;
             Task::none()
         }
-        Msg::CopySecret => clipboard_write(app.secret.clone()),
+        Msg::CopySecret => Task::from(clipboard::write(app.secret.clone())),
     }
 }
 

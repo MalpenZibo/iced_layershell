@@ -90,8 +90,6 @@ pub(crate) struct WaylandState {
     // Clipboard / data device
     pub data_device_manager: DataDeviceManagerState,
     pub data_device: Option<DataDevice>,
-    pub last_serial: u32,
-    pub pending_clipboard_write: Option<String>,
 
     // Touch state: track active finger positions for cancel events
     pub touch_fingers: HashMap<i32, (SurfaceId, iced_core::Point)>,
@@ -142,8 +140,6 @@ impl WaylandState {
             next_output_id: 0,
             data_device_manager,
             data_device: None,
-            last_serial: 0,
-            pending_clipboard_write: None,
             touch_fingers: HashMap::new(),
             cursor_shape_manager: None,
             current_mouse_interaction: iced_core::mouse::Interaction::default(),
@@ -255,6 +251,32 @@ impl HasWindowHandle for WaylandWindow {
     }
 }
 
+// --- Key event helpers ---
+
+fn make_key_pressed(event: &KeyEvent, modifiers: iced_core::keyboard::Modifiers, repeat: bool) -> iced_core::Event {
+    let key = crate::conversion::keysym_to_iced_key(event.keysym);
+    iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: crate::conversion::scancode_to_physical(event.raw_code),
+        location: iced_core::keyboard::Location::Standard,
+        modifiers,
+        text: crate::conversion::key_utf8_to_text(event.utf8.as_deref()),
+        repeat,
+    })
+}
+
+fn make_key_released(event: &KeyEvent, modifiers: iced_core::keyboard::Modifiers) -> iced_core::Event {
+    let key = crate::conversion::keysym_to_iced_key(event.keysym);
+    iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyReleased {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: crate::conversion::scancode_to_physical(event.raw_code),
+        location: iced_core::keyboard::Location::Standard,
+        modifiers,
+    })
+}
+
 // --- SCTK delegate implementations ---
 
 impl CompositorHandler for WaylandState {
@@ -267,9 +289,8 @@ impl CompositorHandler for WaylandState {
     ) {
         if let Some(data) = self.surfaces.get_mut(surface) {
             data.scale_factor = new_factor;
-            // Tell the compositor our buffer is at physical pixel resolution
             surface.set_buffer_scale(new_factor);
-            surface.commit();
+            // Don't commit here — the next render will commit with the correctly-scaled buffer
             self.surfaces_need_redraw.insert(data.id);
         }
     }
@@ -384,24 +405,10 @@ impl SeatHandler for WaylandState {
                         self.loop_handle.clone(),
                         Box::new(|state, _keyboard, event| {
                             if let Some(surface_id) = state.keyboard_focus {
-                                let key = crate::conversion::keysym_to_iced_key(event.keysym);
                                 state.pending_events.push((
                                     surface_id,
-                                    iced_core::Event::Keyboard(
-                                        iced_core::keyboard::Event::KeyPressed {
-                                            key: key.clone(),
-                                            modified_key: key.clone(),
-                                            physical_key: iced_core::keyboard::key::Physical::Unidentified(
-                                                iced_core::keyboard::key::NativeCode::Xkb(event.raw_code),
-                                            ),
-                                            location: iced_core::keyboard::Location::Standard,
-                                            modifiers: state.modifiers,
-                                            text: crate::conversion::key_utf8_to_text(event.utf8.as_deref()),
-                                            repeat: true,
-                                        },
-                                    ),
+                                    make_key_pressed(&event, state.modifiers, true),
                                 ));
-                                state.surfaces_need_redraw.insert(surface_id);
                             }
                         }),
                     )
@@ -429,8 +436,18 @@ impl SeatHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _seat: WlSeat,
-        _capability: Capability,
+        capability: Capability,
     ) {
+        match capability {
+            Capability::Pointer => {
+                self.wl_pointer = None;
+                self.pointer_surface = None;
+            }
+            Capability::Keyboard => {
+                self.keyboard_focus = None;
+            }
+            _ => {}
+        }
     }
 
     fn remove_seat(
@@ -449,11 +466,10 @@ impl KeyboardHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _keyboard: &WlKeyboard,
         surface: &WlSurface,
-        serial: u32,
+        _serial: u32,
         _raw: &[u32],
         _keysyms: &[smithay_client_toolkit::seat::keyboard::Keysym],
     ) {
-        self.last_serial = serial;
         self.keyboard_focus = self.surface_id_for(surface);
     }
 
@@ -473,25 +489,13 @@ impl KeyboardHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &WlKeyboard,
-        serial: u32,
+        _serial: u32,
         event: KeyEvent,
     ) {
-        self.last_serial = serial;
         if let Some(surface_id) = self.keyboard_focus {
-            let key = conversion::keysym_to_iced_key(event.keysym);
             self.pending_events.push((
                 surface_id,
-                iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
-                    key: key.clone(),
-                    modified_key: key.clone(),
-                    physical_key: iced_core::keyboard::key::Physical::Unidentified(
-                        iced_core::keyboard::key::NativeCode::Xkb(event.raw_code),
-                    ),
-                    location: iced_core::keyboard::Location::Standard,
-                    modifiers: self.modifiers,
-                    text: conversion::key_utf8_to_text(event.utf8.as_deref()),
-                    repeat: false,
-                }),
+                make_key_pressed(&event, self.modifiers, false),
             ));
         }
     }
@@ -505,18 +509,9 @@ impl KeyboardHandler for WaylandState {
         event: KeyEvent,
     ) {
         if let Some(surface_id) = self.keyboard_focus {
-            let key = conversion::keysym_to_iced_key(event.keysym);
             self.pending_events.push((
                 surface_id,
-                iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyReleased {
-                    key: key.clone(),
-                    modified_key: key.clone(),
-                    physical_key: iced_core::keyboard::key::Physical::Unidentified(
-                        iced_core::keyboard::key::NativeCode::Xkb(event.raw_code),
-                    ),
-                    location: iced_core::keyboard::Location::Standard,
-                    modifiers: self.modifiers,
-                }),
+                make_key_released(&event, self.modifiers),
             ));
         }
     }
@@ -548,25 +543,11 @@ impl KeyboardHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _keyboard: &WlKeyboard,
         _serial: u32,
-        event: KeyEvent,
+        _event: KeyEvent,
     ) {
-        if let Some(surface_id) = self.keyboard_focus {
-            let key = conversion::keysym_to_iced_key(event.keysym);
-            self.pending_events.push((
-                surface_id,
-                iced_core::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
-                    key: key.clone(),
-                    modified_key: key.clone(),
-                    physical_key: iced_core::keyboard::key::Physical::Unidentified(
-                        iced_core::keyboard::key::NativeCode::Xkb(event.raw_code),
-                    ),
-                    location: iced_core::keyboard::Location::Standard,
-                    modifiers: self.modifiers,
-                    text: conversion::key_utf8_to_text(event.utf8.as_deref()),
-                    repeat: true,
-                }),
-            ));
-        }
+        // No-op: client-side repeat is handled by the calloop callback
+        // registered in get_keyboard_with_repeat. Compositor-side repeat
+        // events would cause duplicates.
     }
 }
 
@@ -586,7 +567,6 @@ impl PointerHandler for WaylandState {
 
             match event.kind {
                 PointerEventKind::Enter { serial, .. } => {
-                    self.last_serial = serial;
                     self.pointer_enter_serial = serial;
                     self.pointer_surface = Some(surface_id);
                     self.cursor_position = iced_core::Point::new(
@@ -617,8 +597,7 @@ impl PointerHandler for WaylandState {
                         }),
                     ));
                 }
-                PointerEventKind::Press { button, serial, .. } => {
-                    self.last_serial = serial;
+                PointerEventKind::Press { button, .. } => {
                     self.pending_events.push((
                         surface_id,
                         iced_core::Event::Mouse(iced_core::mouse::Event::ButtonPressed(
@@ -639,20 +618,28 @@ impl PointerHandler for WaylandState {
                     vertical,
                     ..
                 } => {
+                    // If the compositor signals Inverted (natural scrolling),
+                    // the delta is already in content-scroll direction — don't negate.
+                    let inverted = matches!(
+                        horizontal.relative_direction.or(vertical.relative_direction),
+                        Some(wayland_client::protocol::wl_pointer::AxisRelativeDirection::Inverted)
+                    );
+                    let sign = if inverted { 1.0 } else { -1.0 };
+
                     let delta = if horizontal.value120 != 0 || vertical.value120 != 0 {
                         iced_core::mouse::ScrollDelta::Lines {
-                            x: -horizontal.value120 as f32 / 120.0,
-                            y: -vertical.value120 as f32 / 120.0,
+                            x: sign * horizontal.value120 as f32 / 120.0,
+                            y: sign * vertical.value120 as f32 / 120.0,
                         }
                     } else if horizontal.discrete != 0 || vertical.discrete != 0 {
                         iced_core::mouse::ScrollDelta::Lines {
-                            x: -horizontal.discrete as f32,
-                            y: -vertical.discrete as f32,
+                            x: sign * horizontal.discrete as f32,
+                            y: sign * vertical.discrete as f32,
                         }
                     } else {
                         iced_core::mouse::ScrollDelta::Pixels {
-                            x: -horizontal.absolute as f32,
-                            y: -vertical.absolute as f32,
+                            x: sign * horizontal.absolute as f32,
+                            y: sign * vertical.absolute as f32,
                         }
                     };
                     self.pending_events.push((
@@ -816,9 +803,8 @@ delegate_registry!(WaylandState);
 impl TouchHandler for WaylandState {
     fn down(
         &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        serial: u32, _time: u32, surface: WlSurface, id: i32, position: (f64, f64),
+        _serial: u32, _time: u32, surface: WlSurface, id: i32, position: (f64, f64),
     ) {
-        self.last_serial = serial;
         if let Some(surface_id) = self.surface_id_for(&surface) {
             let pos = iced_core::Point::new(position.0 as f32, position.1 as f32);
             self.touch_fingers.insert(id, (surface_id, pos));
@@ -834,9 +820,8 @@ impl TouchHandler for WaylandState {
 
     fn up(
         &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch,
-        serial: u32, _time: u32, id: i32,
+        _serial: u32, _time: u32, id: i32,
     ) {
-        self.last_serial = serial;
         if let Some((surface_id, pos)) = self.touch_fingers.remove(&id) {
             self.pending_events.push((
                 surface_id,

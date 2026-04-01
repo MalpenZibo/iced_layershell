@@ -1,11 +1,14 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem::{self, ManuallyDrop};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
-use futures::{StreamExt, channel::mpsc};
-use iced_futures::Executor as _;
+use futures::{Sink, StreamExt, channel::mpsc};
 use iced_core::mouse;
 use iced_core::{Font, Size, Theme};
 use iced_graphics::compositor::Compositor as _;
@@ -126,6 +129,45 @@ struct IcedSurface {
     needs_redraw: bool,
 }
 
+/// Wraps an mpsc sender to also signal a calloop ping on each send,
+/// waking the event loop when async tasks produce messages.
+/// Sends `Action<M>` so all runtime actions (clipboard, widget ops, etc.)
+/// flow to the main loop for synchronous processing.
+struct WakeupSender<M> {
+    inner: mpsc::UnboundedSender<Action<M>>,
+    ping: calloop::ping::Ping,
+}
+
+impl<M> Clone for WakeupSender<M> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone(), ping: self.ping.clone() }
+    }
+}
+
+impl<M> Sink<Action<M>> for WakeupSender<M> {
+    type Error = mpsc::SendError;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().inner).poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Action<M>) -> Result<(), Self::Error> {
+        let this = self.get_mut();
+        Pin::new(&mut this.inner).start_send(item)?;
+        this.ping.ping();
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().inner).poll_close(cx)
+    }
+}
+
+impl<M> Unpin for WakeupSender<M> {}
 
 fn run<State, Message>(app: Application<State, Message>) -> Result<(), Error>
 where
@@ -213,7 +255,7 @@ where
 
     // --- Phase 1b: iced compositor + renderer ---
     let main_data = wl_state.surfaces.get(&main_wl).unwrap();
-    let monitor_scale = main_data.scale_factor as u32;
+    let monitor_scale = main_data.scale_factor.max(1) as u32;
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
         // Convert surface-local to physical pixels
         (main_data.size.0 * monitor_scale.max(1),
@@ -269,18 +311,23 @@ where
 
     // --- Phase 2: Boot + iced_futures::Runtime ---
 
-    // Set up the iced_futures runtime for subscriptions and async task execution
+    // Set up the iced_futures runtime for subscriptions and async task execution.
+    // WakeupSender wraps the mpsc sender to signal a calloop ping on each send,
+    // so the event loop wakes immediately when async tasks produce messages.
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
-    let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Message>();
-    let mut runtime =
-        iced_futures::Runtime::new(executor, runtime_sender.clone());
+    let (ping, ping_source) = calloop::ping::make_ping()
+        .map_err(|e| Error::EventLoop(e.to_string()))?;
+    let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Action<Message>>();
+    let wakeup_sender = WakeupSender { inner: runtime_sender, ping: ping.clone() };
+    let mut runtime = iced_futures::Runtime::new(executor, wakeup_sender);
+    let exit_flag = Arc::new(AtomicBool::new(false));
 
     let (mut user_state, boot_task) = (app.boot)();
 
     // Process boot task
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
-    process_task(boot_task, &mut wl_state, &mut runtime, &mut pending_creations, &qh);
+    process_task(boot_task, &mut wl_state, &mut runtime, &mut pending_creations, &qh, &exit_flag, &ping);
 
     // Create surfaces requested during boot
     for (id, settings) in pending_creations.drain(..) {
@@ -302,7 +349,10 @@ where
     // Create iced rendering surfaces for everything registered
     sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, 1.0);
 
-    // --- Phase 3: Insert wayland source into calloop event loop ---
+    // --- Phase 3: Insert event sources into calloop event loop ---
+    event_loop.handle()
+        .insert_source(ping_source, |_, _, _| {})
+        .map_err(|e| Error::EventLoop(e.to_string()))?;
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
         .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -314,20 +364,30 @@ where
         build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
     );
 
+    // Reusable buffers — hoisted outside the loop to avoid per-frame allocations
+    let mut runtime_messages: Vec<Message> = Vec::new();
+    let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
+    let mut all_messages: Vec<Message> = Vec::new();
+    let mut surface_ids: Vec<SurfaceId> = Vec::new();
+    let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+    let mut discard: Vec<Message> = Vec::new();
+
     let mut first_frame = true;
     while running {
-        // --- a. Dispatch wayland events ---
+        // --- a. Dispatch wayland events (blocks until something happens) ---
         let timeout = if first_frame {
             first_frame = false;
             Some(std::time::Duration::ZERO)
-        } else if app.subscription_fn.is_some() {
-            Some(std::time::Duration::from_millis(100))
         } else {
             None
         };
         event_loop
             .dispatch(timeout, &mut wl_state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
+
+        if exit_flag.load(Ordering::Relaxed) {
+            break;
+        }
 
         // Bridge wl_state.surfaces_need_redraw → iced_s.needs_redraw
         for id in wl_state.surfaces_need_redraw.drain() {
@@ -343,20 +403,37 @@ where
             if let Some(wl_surface) = wl_state.surface_id_map.remove(&closed_id) {
                 wl_state.surfaces.remove(&wl_surface);
             }
+            if wl_state.pointer_surface == Some(closed_id) {
+                wl_state.pointer_surface = None;
+            }
+            if wl_state.keyboard_focus == Some(closed_id) {
+                wl_state.keyboard_focus = None;
+            }
+            wl_state.touch_fingers.retain(|_, (sid, _)| *sid != closed_id);
         }
 
-        // --- c. Drain async messages ---
-        let mut runtime_messages: Vec<Message> = Vec::new();
+        // --- c. Drain async actions and process synchronously ---
+        runtime_messages.clear();
         loop {
-            match runtime_receiver.try_next() {
-                Ok(Some(msg)) => runtime_messages.push(msg),
+            match runtime_receiver.try_recv() {
+                Ok(action) => run_action(
+                    action,
+                    &mut runtime_messages,
+                    &mut clipboard,
+                    &mut user_interfaces,
+                    &mut renderer,
+                    &mut compositor,
+                    &mut iced_surfaces,
+                    &exit_flag,
+                    &ping,
+                ),
                 _ => break,
             }
         }
 
-        // --- d. Track subscriptions ---
+        // --- d. Track subscriptions (wrapped in Action::Output for the runtime) ---
         if let Some(ref sub_fn) = app.subscription_fn {
-            let subscription = sub_fn(&user_state);
+            let subscription = sub_fn(&user_state).map(Action::Output);
             let recipes = iced_futures::subscription::into_recipes(subscription);
             runtime.track(recipes);
         }
@@ -374,7 +451,7 @@ where
             if let Some(iced) = iced_surfaces.get_mut(&data.id) {
                 let (sw, sh) = data.size;
                 if sw > 0 && sh > 0 {
-                    let monitor_scale = data.scale_factor as u32;
+                    let monitor_scale = data.scale_factor.max(1) as u32;
                     let phys_w = sw * monitor_scale.max(1);
                     let phys_h = sh * monitor_scale.max(1);
                     let combined_scale = data.scale_factor as f32 * app_scale;
@@ -397,7 +474,7 @@ where
         // --- g. Transform and group events ---
         let pending_events = mem::take(&mut wl_state.pending_events);
         let scale = |p: iced_core::Point| iced_core::Point::new(p.x / app_scale, p.y / app_scale);
-        let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
+        surface_events.clear();
         for (sid, event) in pending_events {
             let event = match event {
                 iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved { position }) =>
@@ -420,18 +497,20 @@ where
             .as_ref()
             .map_or(Theme::CatppuccinMocha, |f| f(&user_state));
 
-        let mut all_messages: Vec<Message> = Vec::new();
-        all_messages.extend(runtime_messages);
+        all_messages.clear();
+        all_messages.extend(runtime_messages.drain(..));
+        let has_runtime_messages = !all_messages.is_empty();
 
         // ==================================================================
         // PHASE 1: Update EXISTING UIs with user events (like iced_winit's
         // AboutToWait). Widgets persist across frames — button.status
         // carries over. Only mark for redraw if a widget requests it.
         // ==================================================================
-        let surface_ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
+        surface_ids.clear();
+        surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
             let events = surface_events.remove(surface_id).unwrap_or_default();
-            if events.is_empty() && all_messages.is_empty() {
+            if events.is_empty() && !has_runtime_messages {
                 continue;
             }
 
@@ -473,7 +552,7 @@ where
         // ==================================================================
         // Process messages: drop UIs → mutate state → rebuild UIs
         // ==================================================================
-        let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+        pending_creations.clear();
         if !all_messages.is_empty() {
             // Drop all UIs before mutating state (same as iced_winit)
             let caches: HashMap<SurfaceId, user_interface::Cache> =
@@ -482,9 +561,9 @@ where
                     .map(|(id, ui)| (id, ui.into_cache()))
                     .collect();
 
-            for message in all_messages {
+            for message in all_messages.drain(..) {
                 let task = (app.update)(&mut user_state, message);
-                process_task(task, &mut wl_state, &mut runtime, &mut pending_creations, &qh);
+                process_task(task, &mut wl_state, &mut runtime, &mut pending_creations, &qh, &exit_flag, &ping);
             }
 
             // Restore caches into iced_surfaces for rebuild
@@ -500,11 +579,6 @@ where
             );
         }
 
-        // Clipboard writes
-        if let Some(contents) = wl_state.pending_clipboard_write.take() {
-            clipboard.write_clipboard(iced_core::clipboard::Kind::Standard, contents);
-        }
-
         // Create newly requested surfaces
         for (id, settings) in pending_creations.drain(..) {
             let layer = create_layer_surface(&wl_state.compositor, &wl_state.layer_shell, &qh, &settings, &wl_state);
@@ -518,11 +592,7 @@ where
                 .filter(|id| !user_interfaces.contains_key(id))
                 .copied().collect();
             for id in new_ids {
-                let iced_s = iced_surfaces.get_mut(&id).unwrap();
-                let cache = iced_s.cache.take().unwrap_or_default();
-                iced_s.needs_redraw = true;
-                let element = (app.view)(&user_state, id);
-                let ui = UserInterface::build(element, iced_s.viewport.logical_size(), cache, &mut renderer);
+                let ui = build_single_ui(&*app.view, &user_state, id, &mut iced_surfaces, &mut renderer);
                 user_interfaces.insert(id, ui);
             }
         }
@@ -533,7 +603,8 @@ where
         // status, then draw and present.
         // ==================================================================
         // Re-collect surface_ids to include surfaces created during message processing
-        let surface_ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
+        surface_ids.clear();
+        surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
             let iced_s = match iced_surfaces.get_mut(surface_id) {
                 Some(s) if s.needs_redraw => { s.needs_redraw = false; s }
@@ -565,8 +636,9 @@ where
             let redraw_event = [iced_core::Event::Window(
                 iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
             )];
-            let mut discard = Vec::new();
+            discard.clear();
             ui.update(&redraw_event, cursor, &mut renderer, &mut clipboard, &mut discard);
+            debug_assert!(discard.is_empty(), "RedrawRequested should not produce messages");
 
             // Draw
             let style = iced_core::renderer::Style { text_color: theme.palette().text };
@@ -589,20 +661,26 @@ where
             }
         }
 
-        // Handle needs_rerender from frame callbacks
-        for (_wl, data) in &wl_state.surfaces {
-            if data.needs_rerender {
-                if let Some(s) = iced_surfaces.get_mut(&data.id) {
-                    s.needs_redraw = true;
-                }
-            }
-        }
     }
 
     Ok(())
 }
 
-/// Split our Task into layer shell commands, iced tasks, and surface creations.
+/// Build a single UserInterface for a surface.
+fn build_single_ui<'a, State, Message: 'a>(
+    view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
+    user_state: &'a State,
+    id: SurfaceId,
+    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
+    renderer: &mut iced_renderer::Renderer,
+) -> UserInterface<'a, Message, Theme, iced_renderer::Renderer> {
+    let iced_s = iced_surfaces.get_mut(&id).unwrap();
+    let cache = iced_s.cache.take().unwrap_or_default();
+    iced_s.needs_redraw = true;
+    let element = view(user_state, id);
+    UserInterface::build(element, iced_s.viewport.logical_size(), cache, renderer)
+}
+
 /// Build a UserInterface for each surface, like iced_winit's build_user_interfaces.
 fn build_user_interfaces<'a, State, Message: 'a>(
     view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
@@ -610,53 +688,110 @@ fn build_user_interfaces<'a, State, Message: 'a>(
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
     renderer: &mut iced_renderer::Renderer,
 ) -> HashMap<SurfaceId, UserInterface<'a, Message, Theme, iced_renderer::Renderer>> {
-    let mut uis = HashMap::new();
     let ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
-    for id in ids {
-        let iced_s = iced_surfaces.get_mut(&id).unwrap();
-        let cache = iced_s.cache.take().unwrap_or_default();
-        iced_s.needs_redraw = true;
-        let element = view(user_state, id);
-        let ui = UserInterface::build(element, iced_s.viewport.logical_size(), cache, renderer);
-        uis.insert(id, ui);
-    }
-    uis
+    ids.into_iter()
+        .map(|id| (id, build_single_ui(view, user_state, id, iced_surfaces, renderer)))
+        .collect()
 }
 
+/// Process a single runtime Action synchronously on the main loop.
+fn run_action<Message: std::fmt::Debug>(
+    action: Action<Message>,
+    messages: &mut Vec<Message>,
+    clipboard: &mut WaylandClipboard,
+    user_interfaces: &mut HashMap<SurfaceId, UserInterface<'_, Message, Theme, iced_renderer::Renderer>>,
+    renderer: &mut iced_renderer::Renderer,
+    compositor: &mut Compositor,
+    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
+    exit_flag: &Arc<AtomicBool>,
+    ping: &calloop::ping::Ping,
+) {
+    match action {
+        Action::Output(msg) => {
+            messages.push(msg);
+        }
+        Action::Clipboard(action) => {
+            use iced_core::clipboard::Clipboard as _;
+            match action {
+                iced_runtime::clipboard::Action::Read { target, channel } => {
+                    let contents = clipboard.read(target);
+                    let _ = channel.send(contents);
+                }
+                iced_runtime::clipboard::Action::Write { target, contents } => {
+                    clipboard.write(target, contents);
+                }
+            }
+        }
+        Action::Widget(mut operation) => {
+            loop {
+                for ui in user_interfaces.values_mut() {
+                    ui.operate(renderer, operation.as_mut());
+                }
+                match operation.finish() {
+                    iced_core::widget::operation::Outcome::Chain(next) => {
+                        operation = next;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        Action::LoadFont { bytes, channel } => {
+            compositor.load_font(bytes);
+            let _ = channel.send(Ok(()));
+        }
+        Action::Reload => {
+            for iced_s in iced_surfaces.values_mut() {
+                iced_s.needs_redraw = true;
+                iced_s.cache = None;
+            }
+        }
+        Action::Exit => {
+            exit_flag.store(true, Ordering::Relaxed);
+            ping.ping();
+        }
+        _ => {
+            // Window, System, Image actions are not applicable to layer shell
+        }
+    }
+}
+
+/// Split our Task into layer shell commands, iced tasks, and surface creations.
 fn process_task<M: Send + Clone + 'static>(
     task: Task<M>,
     wl_state: &mut WaylandState,
     runtime: &mut iced_futures::Runtime<
         iced_futures::backend::default::Executor,
-        mpsc::UnboundedSender<M>,
-        M,
+        WakeupSender<M>,
+        Action<M>,
     >,
     pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
     qh: &wayland_client::QueueHandle<WaylandState>,
+    exit_flag: &Arc<AtomicBool>,
+    ping: &calloop::ping::Ping,
 ) {
     match task {
         Task::LayerShell(cmd) => {
             apply_layer_shell_command(cmd, wl_state, pending_creations, qh);
         }
         Task::Iced(iced_task) => {
-            // Use the public into_stream to extract and run the task
             if let Some(stream) = iced_runtime::task::into_stream(iced_task) {
-                let stream = stream.filter_map(|action| async move {
-                    match action {
-                        Action::Output(msg) => Some(msg),
-                        Action::Exit => {
-                            // TODO: signal exit
-                            None
-                        }
-                        _ => None, // Clipboard, Window, etc. not handled yet
+                // Stream yields Action<M> — forward all to the main loop via runtime.
+                // Intercept Exit to set the flag immediately (ping wakes calloop).
+                let exit_flag = exit_flag.clone();
+                let ping = ping.clone();
+                let stream = stream.map(move |action| {
+                    if matches!(&action, Action::Exit) {
+                        exit_flag.store(true, Ordering::Relaxed);
+                        ping.ping();
                     }
+                    action
                 });
                 runtime.run(Box::pin(stream));
             }
         }
         Task::Batch(tasks) => {
             for t in tasks {
-                process_task(t, wl_state, runtime, pending_creations, qh);
+                process_task(t, wl_state, runtime, pending_creations, qh, exit_flag, ping);
             }
         }
     }
@@ -733,9 +868,6 @@ fn apply_layer_shell_command(
                     data.layer_surface.wl_surface().commit();
                 }
             }
-        }
-        LayerShellCommand::ClipboardWrite(contents) => {
-            state.pending_clipboard_write = Some(contents);
         }
     }
 }
@@ -815,7 +947,7 @@ fn sync_iced_surfaces(
             continue;
         }
         if let Some(window) = WaylandWindow::new(wl_state.display_ptr, wl_surface) {
-            let monitor_scale = data.scale_factor as u32;
+            let monitor_scale = data.scale_factor.max(1) as u32;
             let (w, h) = (
                 data.size.0 * monitor_scale.max(1),
                 data.size.1 * monitor_scale.max(1),

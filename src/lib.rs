@@ -18,7 +18,7 @@ pub use settings::{
     SurfaceId,
 };
 pub use task_impl::{
-    clipboard_write, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
+    destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
     set_keyboard_interactivity, set_layer, set_margin, set_size,
 };
 
@@ -115,7 +115,7 @@ pub mod widget {
 
 pub mod task {
     pub use crate::task_impl::{
-        Task, clipboard_write, destroy_layer_surface, new_layer_surface, set_anchor,
+        Task, destroy_layer_surface, new_layer_surface, set_anchor,
         set_exclusive_zone, set_keyboard_interactivity, set_layer, set_margin, set_size,
     };
     pub use iced_runtime::task::Handle;

@@ -32,6 +32,11 @@ Wayland layer shell backend for standard iced 0.14 (no fork). Replaces iced_wini
 - Touch: support touch events for touchscreen devices.
 - Cursor: text beam on text inputs only, default arrow everywhere else.
 
+### Surface lifecycle (ashell-specific)
+- **MAIN surface can be destroyed and recreated.** ashell manages its own surface lifecycle — it destroys the initial `SurfaceId::MAIN` fallback and creates new per-output surfaces when monitors are added. Do NOT exit the event loop when MAIN is closed.
+- **Output-driven lifecycle**: surfaces are created/destroyed in response to `OutputEvent::Added`/`Removed`. When all monitors disconnect, a fallback surface is created.
+- **Layer changes trigger full destruction/recreation** of both the main surface and its menu overlay. Other config changes (size, position, style) use in-place updates (`set_size`, `set_anchor`, etc.).
+
 ## Key Technical Decisions
 - **RedrawRequested**: iced 0.14 widgets (buttons, etc.) only update visual status on `Window::RedrawRequested` events. This event must be injected when a redraw is actually needed — not on every frame.
 - **Buffer scale**: Call `wl_surface.set_buffer_scale(monitor_scale)` so the compositor correctly maps surface-local coordinates to physical pixels.
