@@ -340,7 +340,7 @@ where
     let mut runtime = iced_futures::Runtime::new(executor, wakeup_sender);
     let exit_flag = Arc::new(AtomicBool::new(false));
 
-    let (mut user_state, boot_task) = (app.boot)();
+    let (mut user_state, boot_task) = runtime.enter(|| (app.boot)());
 
     // Process boot task
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
@@ -453,7 +453,7 @@ where
         }
 
         if let Some(ref sub_fn) = app.subscription_fn {
-            let subscription = sub_fn(&user_state).map(Action::Output);
+            let subscription = runtime.enter(|| sub_fn(&user_state)).map(Action::Output);
             let recipes = iced_futures::subscription::into_recipes(subscription);
             runtime.track(recipes);
         }
@@ -606,7 +606,7 @@ where
                     .collect();
 
             for message in all_messages.drain(..) {
-                let task = (app.update)(&mut user_state, message);
+                let task = runtime.enter(|| (app.update)(&mut user_state, message));
                 process_task(
                     task,
                     &mut wl_state,
