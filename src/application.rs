@@ -687,6 +687,7 @@ where
         surface_ids.clear();
         surface_ids.extend(iced_surfaces.keys().copied());
         for surface_id in &surface_ids {
+            discard.clear();
             let iced_s = match iced_surfaces.get_mut(surface_id) {
                 Some(s) if s.needs_redraw => {
                     s.needs_redraw = false;
@@ -722,7 +723,6 @@ where
             let redraw_event = [iced_core::Event::Window(
                 iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
             )];
-            discard.clear();
             ui.update(
                 &redraw_event,
                 cursor,
