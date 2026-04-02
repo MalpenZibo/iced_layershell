@@ -9,6 +9,7 @@ impl WaylandClipboard {
     /// `display_ptr` must be a valid `*mut wl_display`.
     pub unsafe fn new(display_ptr: *mut std::ffi::c_void) -> Self {
         Self {
+            // Safety: display_ptr is valid for the lifetime of the Wayland connection
             clipboard: unsafe { smithay_clipboard::Clipboard::new(display_ptr.cast()) },
         }
     }

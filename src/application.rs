@@ -205,6 +205,7 @@ where
     let display_ptr = conn.backend().display_ptr().cast::<std::ffi::c_void>();
     // Create clipboard early — smithay-clipboard spawns its own worker thread
     // with its own wayland connection that needs to receive selection events
+    // Safety: display_ptr is valid for the lifetime of the Wayland connection
     let mut clipboard = unsafe { WaylandClipboard::new(display_ptr) };
 
     let (globals, mut event_queue) = registry_queue_init::<WaylandState>(&conn)?;
@@ -274,7 +275,10 @@ where
             .map_err(|e| Error::EventLoop(e.to_string()))?;
     }
 
-    let main_data = wl_state.surfaces.get(&main_wl).unwrap();
+    let main_data = wl_state
+        .surfaces
+        .get(&main_wl)
+        .ok_or_else(|| Error::EventLoop("main surface data missing after registration".into()))?;
     let monitor_scale = main_data.scale_factor.max(1) as u32;
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
         // Convert surface-local to physical pixels
@@ -567,7 +571,7 @@ where
                 &mut all_messages,
             );
 
-            for (event, status) in events.iter().zip(statuses.into_iter()) {
+            for (event, status) in events.iter().zip(statuses) {
                 runtime.broadcast(iced_futures::subscription::Event::Interaction {
                     window: (*surface_id).into(),
                     event: event.clone(),
