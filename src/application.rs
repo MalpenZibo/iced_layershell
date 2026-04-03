@@ -359,16 +359,7 @@ where
     );
 
     // Create surfaces requested during boot
-    for (id, settings) in pending_creations.drain(..) {
-        let layer = create_layer_surface(
-            &wl_state.compositor,
-            &wl_state.layer_shell,
-            &qh,
-            &settings,
-            &wl_state,
-        );
-        wl_state.register_surface(id, layer);
-    }
+    flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
 
     // Roundtrip so new surfaces get configured
     event_queue
@@ -648,16 +639,7 @@ where
         }
 
         // Create newly requested surfaces
-        for (id, settings) in pending_creations.drain(..) {
-            let layer = create_layer_surface(
-                &wl_state.compositor,
-                &wl_state.layer_shell,
-                &qh,
-                &settings,
-                &wl_state,
-            );
-            wl_state.register_surface(id, layer);
-        }
+        flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
         // Build UIs for newly created surfaces
@@ -1009,6 +991,17 @@ fn apply_layer_shell_command(
                 data.layer_surface.wl_surface().commit();
             }
         }
+    }
+}
+
+fn flush_pending_creations(
+    wl: &mut WaylandState,
+    pending: &mut Vec<(SurfaceId, LayerShellSettings)>,
+    qh: &wayland_client::QueueHandle<WaylandState>,
+) {
+    while let Some((id, settings)) = pending.pop() {
+        let layer = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
+        wl.register_surface(id, layer);
     }
 }
 
