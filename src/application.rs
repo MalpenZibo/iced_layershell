@@ -567,7 +567,7 @@ where
                 &mut all_messages,
             );
 
-            for (event, status) in events.iter().zip(statuses.into_iter()) {
+            for (event, status) in events.iter().zip(statuses) {
                 runtime.broadcast(iced_futures::subscription::Event::Interaction {
                     window: (*surface_id).into(),
                     event: event.clone(),
