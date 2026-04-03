@@ -28,9 +28,10 @@ use wayland_client::globals::registry_queue_init;
 
 use crate::error::Error;
 use crate::settings::{LayerShellSettings, SurfaceId};
-use crate::state::{WaylandState, WaylandWindow};
+use crate::state::WaylandState;
 use crate::task_impl::{LayerShellCommand, Task};
 use crate::wayland_clipboard::WaylandClipboard;
+use crate::window_handle::WaylandWindow;
 
 type Element<'a, M> = iced_core::Element<'a, M, Theme, iced_renderer::Renderer>;
 
