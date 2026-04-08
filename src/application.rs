@@ -1,15 +1,13 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem::{self, ManuallyDrop};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
-use futures::{Sink, StreamExt, channel::mpsc};
-use iced_core::mouse;
+use futures::{StreamExt, channel::mpsc};
 use iced_core::{Font, Size, Theme};
 use iced_graphics::Viewport;
 use iced_graphics::compositor::Compositor as _;
@@ -27,9 +25,15 @@ use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
 
 use crate::error::Error;
+use crate::event_loop::WakeupSender;
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
-use crate::task_impl::{LayerShellCommand, Task};
+use crate::surface_manager::{
+    IcedSurface, apply_layer_shell_command, create_layer_surface, flush_pending_creations,
+    scaled_cursor, sync_iced_surfaces,
+};
+use crate::task_impl::Task;
+use crate::ui_builder::{build_single_ui, build_user_interfaces};
 use crate::wayland_clipboard::WaylandClipboard;
 use crate::window_handle::WaylandWindow;
 
@@ -136,56 +140,6 @@ where
         antialiasing: false,
     }
 }
-
-struct IcedSurface {
-    surface: <Compositor as iced_graphics::Compositor>::Surface,
-    viewport: Viewport,
-    cache: Option<user_interface::Cache>,
-    needs_redraw: bool,
-}
-
-/// Wraps an mpsc sender to also signal a calloop ping on each send,
-/// waking the event loop when async tasks produce messages.
-/// Sends `Action<M>` so all runtime actions (clipboard, widget ops, etc.)
-/// flow to the main loop for synchronous processing.
-struct WakeupSender<M> {
-    inner: mpsc::UnboundedSender<Action<M>>,
-    ping: calloop::ping::Ping,
-}
-
-impl<M> Clone for WakeupSender<M> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            ping: self.ping.clone(),
-        }
-    }
-}
-
-impl<M> Sink<Action<M>> for WakeupSender<M> {
-    type Error = mpsc::SendError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Action<M>) -> Result<(), Self::Error> {
-        let this = self.get_mut();
-        Pin::new(&mut this.inner).start_send(item)?;
-        this.ping.ping();
-        Ok(())
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_close(cx)
-    }
-}
-
-impl<M> Unpin for WakeupSender<M> {}
 
 #[allow(
     clippy::too_many_lines,
@@ -743,45 +697,6 @@ where
     Ok(())
 }
 
-/// Build a single `UserInterface` for a surface.
-fn build_single_ui<'a, State, Message: 'a>(
-    view: &dyn for<'v> Fn(
-        &'v State,
-        SurfaceId,
-    ) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
-    user_state: &'a State,
-    id: SurfaceId,
-    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
-    renderer: &mut iced_renderer::Renderer,
-) -> UserInterface<'a, Message, Theme, iced_renderer::Renderer> {
-    let iced_s = iced_surfaces.get_mut(&id).unwrap();
-    let cache = iced_s.cache.take().unwrap_or_default();
-    iced_s.needs_redraw = true;
-    let element = view(user_state, id);
-    UserInterface::build(element, iced_s.viewport.logical_size(), cache, renderer)
-}
-
-/// Build a [`UserInterface`] for every registered surface.
-fn build_user_interfaces<'a, State, Message: 'a>(
-    view: &dyn for<'v> Fn(
-        &'v State,
-        SurfaceId,
-    ) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
-    user_state: &'a State,
-    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
-    renderer: &mut iced_renderer::Renderer,
-) -> HashMap<SurfaceId, UserInterface<'a, Message, Theme, iced_renderer::Renderer>> {
-    let ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
-    ids.into_iter()
-        .map(|id| {
-            (
-                id,
-                build_single_ui(view, user_state, id, iced_surfaces, renderer),
-            )
-        })
-        .collect()
-}
-
 /// Process a single runtime Action synchronously on the main loop.
 #[allow(clippy::too_many_arguments)]
 fn run_action<Message: std::fmt::Debug>(
@@ -916,207 +831,4 @@ fn process_task<M: Send + Clone + 'static>(
         }
     }
     actions
-}
-
-/// Apply a synchronous layer shell command (surface create/destroy, property changes).
-fn apply_layer_shell_command(
-    cmd: LayerShellCommand,
-    state: &mut WaylandState,
-    pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
-    _qh: &wayland_client::QueueHandle<WaylandState>,
-) {
-    match cmd {
-        LayerShellCommand::NewSurface(id, settings) => {
-            pending_creations.push((id, settings));
-        }
-        LayerShellCommand::DestroySurface(id) => {
-            state.closed_surfaces.push(id);
-        }
-        LayerShellCommand::SetAnchor(id, anchor) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_anchor(anchor.to_sctk());
-                data.layer_surface.wl_surface().commit();
-            }
-        }
-        LayerShellCommand::SetLayer(id, layer) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_layer(layer.to_sctk());
-                let wl_surf = data.layer_surface.wl_surface();
-                // When hiding (Background), set empty input region so it
-                // doesn't intercept clicks meant for surfaces above it.
-                if layer == crate::settings::Layer::Background {
-                    if let Ok(empty) =
-                        smithay_client_toolkit::compositor::Region::new(&state.compositor)
-                    {
-                        wl_surf.set_input_region(Some(empty.wl_region()));
-                    }
-                } else {
-                    wl_surf.set_input_region(None);
-                }
-                wl_surf.commit();
-            }
-        }
-        LayerShellCommand::SetExclusiveZone(id, zone) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_exclusive_zone(zone);
-                data.layer_surface.wl_surface().commit();
-            }
-        }
-        LayerShellCommand::SetKeyboardInteractivity(id, ki) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_keyboard_interactivity(ki.to_sctk());
-                data.layer_surface.wl_surface().commit();
-            }
-        }
-        LayerShellCommand::SetSize(id, (w, h)) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get_mut(wl)
-            {
-                data.layer_surface.set_size(w, h);
-                data.layer_surface.wl_surface().commit();
-            }
-        }
-        LayerShellCommand::SetMargin(id, (top, right, bottom, left)) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_margin(top, right, bottom, left);
-                data.layer_surface.wl_surface().commit();
-            }
-        }
-    }
-}
-
-fn flush_pending_creations(
-    wl: &mut WaylandState,
-    pending: &mut Vec<(SurfaceId, LayerShellSettings)>,
-    qh: &wayland_client::QueueHandle<WaylandState>,
-) {
-    while let Some((id, settings)) = pending.pop() {
-        let layer = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
-        wl.register_surface(id, layer);
-    }
-}
-
-/// Create a new Wayland layer surface from settings, targeting a specific output if configured.
-fn create_layer_surface(
-    compositor_state: &CompositorState,
-    layer_shell_state: &LayerShell,
-    qh: &wayland_client::QueueHandle<WaylandState>,
-    settings: &LayerShellSettings,
-    wl_state: &WaylandState,
-) -> smithay_client_toolkit::shell::wlr_layer::LayerSurface {
-    let surface = compositor_state.create_surface(qh);
-
-    // Resolve OutputId → WlOutput for targeting a specific monitor
-    let wl_output = settings.output.and_then(|output_id| {
-        wl_state
-            .outputs
-            .iter()
-            .find(|(_, info)| info.id == output_id)
-            .map(|(wl_output, _)| wl_output.clone())
-    });
-
-    let layer_surface = layer_shell_state.create_layer_surface(
-        qh,
-        surface,
-        settings.layer.to_sctk(),
-        Some(settings.namespace.clone()),
-        wl_output.as_ref(),
-    );
-
-    layer_surface.set_anchor(settings.anchor.to_sctk());
-    layer_surface.set_exclusive_zone(settings.exclusive_zone);
-    layer_surface.set_keyboard_interactivity(settings.keyboard_interactivity.to_sctk());
-
-    if let Some((w, h)) = settings.size {
-        layer_surface.set_size(w, h);
-    }
-
-    let (top, right, bottom, left) = settings.margin;
-    layer_surface.set_margin(top, right, bottom, left);
-
-    // Surfaces on Background layer start with empty input region
-    // to avoid intercepting input meant for surfaces above them
-    if settings.layer == crate::settings::Layer::Background
-        && let Ok(empty) = smithay_client_toolkit::compositor::Region::new(compositor_state)
-    {
-        layer_surface
-            .wl_surface()
-            .set_input_region(Some(empty.wl_region()));
-    }
-
-    // Set buffer scale for HiDPI — matches the target output or first available
-    let scale = wl_output
-        .as_ref()
-        .and_then(|wo| wl_state.outputs.get(wo))
-        .map(|info| info.scale_factor)
-        .or_else(|| {
-            wl_state
-                .outputs
-                .values()
-                .next()
-                .map(|info| info.scale_factor)
-        })
-        .unwrap_or(1);
-    if scale > 1 {
-        layer_surface.wl_surface().set_buffer_scale(scale);
-    }
-
-    layer_surface.commit();
-    layer_surface
-}
-
-/// Create a scaled cursor for the given surface.
-fn scaled_cursor(wl_state: &WaylandState, surface_id: SurfaceId, app_scale: f32) -> mouse::Cursor {
-    if wl_state.pointer_surface == Some(surface_id) {
-        let pos = wl_state.cursor_position;
-        mouse::Cursor::Available(iced_core::Point::new(pos.x / app_scale, pos.y / app_scale))
-    } else {
-        mouse::Cursor::Unavailable
-    }
-}
-
-/// Ensure every registered wayland surface has a corresponding iced rendering surface.
-#[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
-fn sync_iced_surfaces(
-    wl_state: &WaylandState,
-    compositor: &mut Compositor,
-    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
-    app_scale: f32,
-) {
-    for (wl_surface, data) in &wl_state.surfaces {
-        if iced_surfaces.contains_key(&data.id) {
-            continue;
-        }
-        // Only create wgpu surface after configure (need real dimensions)
-        if !data.configured || data.size.0 == 0 || data.size.1 == 0 {
-            continue;
-        }
-        if let Some(window) = WaylandWindow::new(wl_state.display_ptr, wl_surface) {
-            let monitor_scale = data.scale_factor.max(1) as u32;
-            let (w, h) = (
-                data.size.0 * monitor_scale.max(1),
-                data.size.1 * monitor_scale.max(1),
-            );
-            let combined_scale = data.scale_factor as f32 * app_scale;
-            iced_surfaces.insert(
-                data.id,
-                IcedSurface {
-                    surface: compositor.create_surface(window, w, h),
-                    viewport: Viewport::with_physical_size(Size::new(w, h), combined_scale),
-                    cache: None,
-                    needs_redraw: true,
-                },
-            );
-        }
-    }
 }

@@ -3,10 +3,13 @@
 mod application;
 mod conversion;
 mod error;
+pub(crate) mod event_loop;
 pub(crate) mod handlers;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
+pub(crate) mod surface_manager;
+pub(crate) mod ui_builder;
 mod wayland_clipboard;
 mod window_handle;
 // Internal task module (re-exported publicly via the `task` module below)
