@@ -14,6 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Extract version from tag
@@ -33,5 +34,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml
+          git diff --cached --quiet && echo "Version already up to date" && exit 0
           git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }}"
           git push origin main
