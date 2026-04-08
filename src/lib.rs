@@ -3,10 +3,12 @@
 mod application;
 mod conversion;
 mod error;
+pub(crate) mod handlers;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
 mod wayland_clipboard;
+mod window_handle;
 // Internal task module (re-exported publicly via the `task` module below)
 #[path = "task.rs"]
 mod task_impl;
