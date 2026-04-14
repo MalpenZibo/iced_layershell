@@ -616,10 +616,7 @@ where
         }
 
         // Draw and present surfaces that need redraw.
-        //
-        // Like iced_winit, we loop: if RedrawRequested produces messages
-        // (e.g. from the `sensor` widget), we process them immediately
-        // and re-run the draw phase — up to 3 times to prevent infinite loops.
+        // Retries up to 3 times if RedrawRequested produces new messages.
         let mut redraw_count = 0u32;
         loop {
             surface_ids.clear();
@@ -650,8 +647,7 @@ where
                     continue;
                 };
 
-                // RedrawRequested makes widgets commit their visual status.
-                // Some widgets (e.g. `sensor`) may produce messages here.
+                // RedrawRequested makes widgets commit visual state
                 let redraw_event = [iced_core::Event::Window(
                     iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
                 )];
@@ -696,10 +692,8 @@ where
                 }
             }
 
-            // If RedrawRequested produced new messages (e.g. from sensor), process
-            // them immediately and loop — matching iced_winit's behavior.
             if all_messages.len() == message_count_before_redraw {
-                break; // No new messages, done.
+                break;
             }
 
             if redraw_count >= 2 {
@@ -760,11 +754,11 @@ where
             flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
             sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
-            // Mark all surfaces for redraw on next iteration of this loop
+            // Mark all surfaces for redraw
             for s in iced_surfaces.values_mut() {
                 s.needs_redraw = true;
             }
-        } // end of redraw loop
+        }
     }
 
     Ok(())

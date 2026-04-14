@@ -20,9 +20,7 @@ pub enum LayerShellCommand {
     SetKeyboardInteractivity(SurfaceId, KeyboardInteractivity),
     SetSize(SurfaceId, (u32, u32)),
     SetMargin(SurfaceId, (i32, i32, i32, i32)),
-    /// Set the input region of a surface. Only the specified rectangles will
-    /// accept pointer/touch input; clicks on the rest of the surface pass
-    /// through to windows below. `None` resets to the default (full surface).
+    /// Restrict pointer/touch input to specific rectangles. `None` resets to full surface.
     SetInputRegion(SurfaceId, Option<Vec<InputRegionRect>>),
 }
 

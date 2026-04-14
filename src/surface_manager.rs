@@ -107,11 +107,9 @@ pub(crate) fn apply_layer_shell_command(
                 let wl_surf = data.layer_surface.wl_surface();
                 match rects {
                     None => {
-                        log::debug!("SetInputRegion({id:?}): reset to full surface");
                         wl_surf.set_input_region(None);
                     }
                     Some(rects) => {
-                        log::debug!("SetInputRegion({id:?}): {rects:?}");
                         if let Ok(region) =
                             smithay_client_toolkit::compositor::Region::new(&state.compositor)
                         {
@@ -123,8 +121,6 @@ pub(crate) fn apply_layer_shell_command(
                     }
                 }
                 wl_surf.commit();
-            } else {
-                log::debug!("SetInputRegion({id:?}): surface not found");
             }
         }
     }
