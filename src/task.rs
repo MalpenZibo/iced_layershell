@@ -1,5 +1,14 @@
 use crate::settings::{Anchor, KeyboardInteractivity, Layer, LayerShellSettings, SurfaceId};
 
+/// A rectangle within a surface's coordinate space, used for input region specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputRegionRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 /// A command to modify the layer shell state.
 #[derive(Debug, Clone)]
 pub enum LayerShellCommand {
@@ -11,6 +20,8 @@ pub enum LayerShellCommand {
     SetKeyboardInteractivity(SurfaceId, KeyboardInteractivity),
     SetSize(SurfaceId, (u32, u32)),
     SetMargin(SurfaceId, (i32, i32, i32, i32)),
+    /// Restrict pointer/touch input to specific rectangles. `None` resets to full surface.
+    SetInputRegion(SurfaceId, Option<Vec<InputRegionRect>>),
 }
 
 /// A task that can be either a standard iced task or a layer shell command.
@@ -180,6 +191,16 @@ pub fn set_size<M>(id: SurfaceId, size: (u32, u32)) -> Task<M> {
 #[must_use]
 pub fn set_margin<M>(id: SurfaceId, margin: (i32, i32, i32, i32)) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetMargin(id, margin))
+}
+
+/// Set the input region of a surface.
+///
+/// Only the specified rectangles will accept pointer/touch input; the rest of
+/// the surface becomes click-through. Pass `None` to reset to the default
+/// (full surface accepts input).
+#[must_use]
+pub fn set_input_region<M>(id: SurfaceId, rects: Option<Vec<InputRegionRect>>) -> Task<M> {
+    Task::LayerShell(LayerShellCommand::SetInputRegion(id, rects))
 }
 
 #[cfg(test)]

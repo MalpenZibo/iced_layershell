@@ -346,7 +346,6 @@ where
     let mut all_messages: Vec<Message> = Vec::new();
     let mut surface_ids: Vec<SurfaceId> = Vec::new();
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
-    let mut discard: Vec<Message> = Vec::new();
 
     let mut first_frame = true;
     while running {
@@ -616,80 +615,148 @@ where
             }
         }
 
-        // Draw and present surfaces that need redraw
-        surface_ids.clear();
-        surface_ids.extend(iced_surfaces.keys().copied());
-        for surface_id in &surface_ids {
-            discard.clear();
-            let iced_s = match iced_surfaces.get_mut(surface_id) {
-                Some(s) if s.needs_redraw => {
-                    s.needs_redraw = false;
-                    s
-                }
-                _ => continue,
-            };
+        // Draw and present surfaces that need redraw.
+        // Retries up to 3 times if RedrawRequested produces new messages.
+        let mut redraw_count = 0u32;
+        loop {
+            surface_ids.clear();
+            surface_ids.extend(iced_surfaces.keys().copied());
+            let message_count_before_redraw = all_messages.len();
 
-            let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
+            for surface_id in &surface_ids {
+                let iced_s = match iced_surfaces.get_mut(surface_id) {
+                    Some(s) if s.needs_redraw => {
+                        s.needs_redraw = false;
+                        s
+                    }
+                    _ => continue,
+                };
 
-            let wl_surface = match wl_state.surface_id_map.get(surface_id) {
-                Some(wl) => wl.clone(),
-                None => continue,
-            };
-            let data = match wl_state.surfaces.get_mut(&wl_surface) {
-                Some(d) if d.configured && d.size.0 > 0 && d.size.1 > 0 => d,
-                _ => continue,
-            };
+                let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
 
-            let Some(ui) = user_interfaces.get_mut(surface_id) else {
-                continue;
-            };
+                let wl_surface = match wl_state.surface_id_map.get(surface_id) {
+                    Some(wl) => wl.clone(),
+                    None => continue,
+                };
+                let data = match wl_state.surfaces.get_mut(&wl_surface) {
+                    Some(d) if d.configured && d.size.0 > 0 && d.size.1 > 0 => d,
+                    _ => continue,
+                };
 
-            // RedrawRequested makes widgets commit their visual status
-            let redraw_event = [iced_core::Event::Window(
-                iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
-            )];
-            ui.update(
-                &redraw_event,
-                cursor,
-                &mut renderer,
-                &mut clipboard,
-                &mut discard,
-            );
-            debug_assert!(
-                discard.is_empty(),
-                "RedrawRequested should not produce messages"
-            );
+                let Some(ui) = user_interfaces.get_mut(surface_id) else {
+                    continue;
+                };
 
-            // Draw
-            let style = iced_core::renderer::Style {
-                text_color: theme.palette().text,
-            };
-            ui.draw(&mut renderer, &theme, &style, cursor);
-
-            // Present
-            if data.frame_pending {
-                data.needs_rerender = true;
-            } else {
-                let bg = iced_core::Color::TRANSPARENT;
-                let wl_surf = data.layer_surface.wl_surface();
-                wl_surf.frame(&qh, wl_surf.clone());
-                data.frame_pending = true;
-
-                match compositor.present(
+                // RedrawRequested makes widgets commit visual state
+                let redraw_event = [iced_core::Event::Window(
+                    iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
+                )];
+                ui.update(
+                    &redraw_event,
+                    cursor,
                     &mut renderer,
-                    &mut iced_s.surface,
-                    &iced_s.viewport,
-                    bg,
-                    || {},
-                ) {
-                    Ok(()) => {}
-                    Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => {
-                        running = false;
-                    }
-                    Err(_) => {
-                        data.frame_pending = false;
+                    &mut clipboard,
+                    &mut all_messages,
+                );
+
+                // Draw
+                let style = iced_core::renderer::Style {
+                    text_color: theme.palette().text,
+                };
+                ui.draw(&mut renderer, &theme, &style, cursor);
+
+                // Present
+                if data.frame_pending {
+                    data.needs_rerender = true;
+                } else {
+                    let bg = iced_core::Color::TRANSPARENT;
+                    let wl_surf = data.layer_surface.wl_surface();
+                    wl_surf.frame(&qh, wl_surf.clone());
+                    data.frame_pending = true;
+
+                    match compositor.present(
+                        &mut renderer,
+                        &mut iced_s.surface,
+                        &iced_s.viewport,
+                        bg,
+                        || {},
+                    ) {
+                        Ok(()) => {}
+                        Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => {
+                            running = false;
+                        }
+                        Err(_) => {
+                            data.frame_pending = false;
+                        }
                     }
                 }
+            }
+
+            if all_messages.len() == message_count_before_redraw {
+                break;
+            }
+
+            if redraw_count >= 2 {
+                log::warn!("More than 3 consecutive RedrawRequested cycles produced messages");
+                break;
+            }
+            redraw_count += 1;
+
+            // Process messages produced during RedrawRequested
+            pending_creations.clear();
+            let caches: HashMap<SurfaceId, user_interface::Cache> =
+                ManuallyDrop::into_inner(user_interfaces)
+                    .into_iter()
+                    .map(|(id, ui)| (id, ui.into_cache()))
+                    .collect();
+
+            let mut sync_actions = Vec::new();
+            for message in all_messages.drain(..) {
+                let task = runtime.enter(|| (app.update)(&mut user_state, message));
+                sync_actions.extend(process_task(
+                    task,
+                    &mut wl_state,
+                    &mut runtime,
+                    &mut pending_creations,
+                    &qh,
+                    &exit_flag,
+                    &ping,
+                ));
+            }
+
+            for (id, cache) in caches {
+                if let Some(iced_s) = iced_surfaces.get_mut(&id) {
+                    iced_s.cache = Some(cache);
+                }
+            }
+
+            user_interfaces = ManuallyDrop::new(build_user_interfaces(
+                &app.view,
+                &user_state,
+                &mut iced_surfaces,
+                &mut renderer,
+            ));
+
+            for action in sync_actions {
+                run_action(
+                    action,
+                    &mut runtime_messages,
+                    &mut clipboard,
+                    &mut user_interfaces,
+                    &mut renderer,
+                    &mut compositor,
+                    &mut iced_surfaces,
+                    &exit_flag,
+                    &ping,
+                );
+            }
+
+            flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
+            sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+
+            // Mark all surfaces for redraw
+            for s in iced_surfaces.values_mut() {
+                s.needs_redraw = true;
             }
         }
     }
