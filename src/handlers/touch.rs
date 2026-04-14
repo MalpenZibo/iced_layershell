@@ -29,6 +29,7 @@ impl TouchHandler for WaylandState {
         position: (f64, f64),
     ) {
         if let Some(surface_id) = self.surface_id_for(&surface) {
+            self.pending_finger_removals.retain(|&fid| fid != id);
             let pos = iced_core::Point::new(position.0 as f32, position.1 as f32);
             self.touch_fingers.insert(id, (surface_id, pos));
             self.pending_events.push((
@@ -50,7 +51,8 @@ impl TouchHandler for WaylandState {
         _time: u32,
         id: i32,
     ) {
-        if let Some((surface_id, pos)) = self.touch_fingers.remove(&id) {
+        if let Some(&(surface_id, pos)) = self.touch_fingers.get(&id) {
+            self.pending_finger_removals.push(id);
             self.pending_events.push((
                 surface_id,
                 iced_core::Event::Touch(iced_core::touch::Event::FingerLifted {
@@ -84,6 +86,7 @@ impl TouchHandler for WaylandState {
     }
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch) {
+        self.pending_finger_removals.clear();
         for (id, (surface_id, pos)) in self.touch_fingers.drain() {
             self.pending_events.push((
                 surface_id,

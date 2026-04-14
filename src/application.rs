@@ -592,6 +592,11 @@ where
             }
         }
 
+        // Flush deferred touch finger removals now that events are processed
+        for id in wl_state.pending_finger_removals.drain(..) {
+            wl_state.touch_fingers.remove(&id);
+        }
+
         // Create newly requested surfaces
         flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
@@ -749,6 +754,10 @@ where
                     &exit_flag,
                     &ping,
                 );
+            }
+
+            for id in wl_state.pending_finger_removals.drain(..) {
+                wl_state.touch_fingers.remove(&id);
             }
 
             flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);

@@ -70,6 +70,9 @@ pub(crate) struct WaylandState {
 
     // Touch state: track active finger positions for cancel events
     pub touch_fingers: HashMap<i32, (SurfaceId, iced_core::Point)>,
+    // Finger IDs to remove from touch_fingers after event processing.
+    // Deferred so scaled_cursor() still sees the finger during FingerLifted.
+    pub pending_finger_removals: Vec<i32>,
 
     // Cursor shape
     pub cursor_shape_manager: Option<CursorShapeManager>,
@@ -119,6 +122,7 @@ impl WaylandState {
             data_device_manager,
             data_device: None,
             touch_fingers: HashMap::new(),
+            pending_finger_removals: Vec::new(),
             cursor_shape_manager: None,
             current_mouse_interaction: iced_core::mouse::Interaction::default(),
             pointer_enter_serial: 0,
