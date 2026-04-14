@@ -208,11 +208,25 @@ pub(crate) fn create_layer_surface(
 }
 
 /// Create a scaled cursor for the given surface.
+///
+/// Active touch position takes precedence over the pointer —
+/// iced widgets check `cursor.is_over(bounds)` for touch events too.
 pub(crate) fn scaled_cursor(
     wl_state: &WaylandState,
     surface_id: SurfaceId,
     app_scale: f32,
 ) -> iced_core::mouse::Cursor {
+    if let Some((_, pos)) = wl_state
+        .touch_fingers
+        .values()
+        .find(|(sid, _)| *sid == surface_id)
+    {
+        return iced_core::mouse::Cursor::Available(iced_core::Point::new(
+            pos.x / app_scale,
+            pos.y / app_scale,
+        ));
+    }
+
     if wl_state.pointer_surface == Some(surface_id) {
         let pos = wl_state.cursor_position;
         iced_core::mouse::Cursor::Available(iced_core::Point::new(
