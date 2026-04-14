@@ -25,8 +25,8 @@ pub use settings::{
     SurfaceId,
 };
 pub use task_impl::{
-    destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
-    set_keyboard_interactivity, set_layer, set_margin, set_size,
+    InputRegionRect, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
+    set_input_region, set_keyboard_interactivity, set_layer, set_margin, set_size,
 };
 
 // === Full iced public API re-export ===
@@ -122,8 +122,9 @@ pub mod widget {
 
 pub mod task {
     pub use crate::task_impl::{
-        Task, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
-        set_keyboard_interactivity, set_layer, set_margin, set_size,
+        InputRegionRect, Task, destroy_layer_surface, new_layer_surface, set_anchor,
+        set_exclusive_zone, set_input_region, set_keyboard_interactivity, set_layer, set_margin,
+        set_size,
     };
     pub use iced_runtime::task::Handle;
 }

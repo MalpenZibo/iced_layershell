@@ -100,6 +100,33 @@ pub(crate) fn apply_layer_shell_command(
                 data.layer_surface.wl_surface().commit();
             }
         }
+        LayerShellCommand::SetInputRegion(id, rects) => {
+            if let Some(wl) = state.surface_id_map.get(&id)
+                && let Some(data) = state.surfaces.get(wl)
+            {
+                let wl_surf = data.layer_surface.wl_surface();
+                match rects {
+                    None => {
+                        log::debug!("SetInputRegion({id:?}): reset to full surface");
+                        wl_surf.set_input_region(None);
+                    }
+                    Some(rects) => {
+                        log::debug!("SetInputRegion({id:?}): {rects:?}");
+                        if let Ok(region) =
+                            smithay_client_toolkit::compositor::Region::new(&state.compositor)
+                        {
+                            for r in &rects {
+                                region.add(r.x, r.y, r.width, r.height);
+                            }
+                            wl_surf.set_input_region(Some(region.wl_region()));
+                        }
+                    }
+                }
+                wl_surf.commit();
+            } else {
+                log::debug!("SetInputRegion({id:?}): surface not found");
+            }
+        }
     }
 }
 
