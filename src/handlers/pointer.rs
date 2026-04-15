@@ -78,29 +78,28 @@ impl PointerHandler for WaylandState {
                     vertical,
                     ..
                 } => {
-                    // If the compositor signals Inverted (natural scrolling),
-                    // the delta is already in content-scroll direction — don't negate.
-                    let inverted =
-                        matches!(
-                        horizontal.relative_direction.or(vertical.relative_direction),
-                        Some(wayland_client::protocol::wl_pointer::AxisRelativeDirection::Inverted)
-                    );
-                    let sign = if inverted { 1.0 } else { -1.0 };
-
+                    // Wayland axis values encode the desired content-scroll
+                    // direction (positive Y = scroll down); iced's ScrollDelta
+                    // uses the inverse convention, so always negate. The
+                    // `axis_relative_direction` flag is informational only
+                    // (physical vs. logical motion, for kinetic scrolling)
+                    // and must not affect the sign here — the compositor
+                    // has already encoded per-device natural-scroll intent
+                    // into the axis value itself.
                     let delta = if horizontal.value120 != 0 || vertical.value120 != 0 {
                         iced_core::mouse::ScrollDelta::Lines {
-                            x: sign * horizontal.value120 as f32 / 120.0,
-                            y: sign * vertical.value120 as f32 / 120.0,
+                            x: -horizontal.value120 as f32 / 120.0,
+                            y: -vertical.value120 as f32 / 120.0,
                         }
                     } else if horizontal.discrete != 0 || vertical.discrete != 0 {
                         iced_core::mouse::ScrollDelta::Lines {
-                            x: sign * horizontal.discrete as f32,
-                            y: sign * vertical.discrete as f32,
+                            x: -horizontal.discrete as f32,
+                            y: -vertical.discrete as f32,
                         }
                     } else {
                         iced_core::mouse::ScrollDelta::Pixels {
-                            x: sign * horizontal.absolute as f32,
-                            y: sign * vertical.absolute as f32,
+                            x: -horizontal.absolute as f32,
+                            y: -vertical.absolute as f32,
                         }
                     };
                     self.pending_events.push((
