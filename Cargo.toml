@@ -34,6 +34,14 @@ raw-window-handle = "0.6"
 # Clipboard
 smithay-clipboard = { version = "0.7", default-features = false }
 
+# Image codec support (feature-unified with iced_graphics' `image` dep)
+image = { version = "0.25", optional = true, default-features = false, features = [
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+] }
+
 # Utilities
 thiserror = "2"
 log = "0.4"
@@ -54,7 +62,7 @@ thread-pool = ["iced_futures/thread-pool"]
 # Widget features
 canvas = ["iced_widget/canvas"]
 svg = ["iced_widget/svg", "iced_renderer/svg"]
-image = ["iced_widget/image", "iced_renderer/image"]
+image = ["iced_widget/image", "iced_renderer/image", "dep:image"]
 lazy = ["iced_widget/lazy"]
 markdown = ["iced_widget/markdown"]
 qr_code = ["iced_widget/qr_code"]
