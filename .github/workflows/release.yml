@@ -37,3 +37,8 @@ jobs:
           git diff --cached --quiet && echo "Version already up to date" && exit 0
           git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }}"
           git push origin main
+
+      - name: Move tag to include version bump
+        run: |
+          git tag -f ${{ github.event.release.tag_name }}
+          git push origin ${{ github.event.release.tag_name }} --force
