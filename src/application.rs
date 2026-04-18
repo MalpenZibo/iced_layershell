@@ -656,12 +656,23 @@ where
                 let redraw_event = [iced_core::Event::Window(
                     iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
                 )];
-                ui.update(
+                let (ui_state, _statuses) = ui.update(
                     &redraw_event,
                     cursor,
                     &mut renderer,
                     &mut clipboard,
                     &mut all_messages,
+                );
+
+                // If the widget requested another frame (e.g. animation in progress),
+                // schedule a full redraw for after the compositor acknowledges this frame.
+                // This mirrors iced_winit where NextFrame maps to vsync-gated request_redraw.
+                let wants_next_frame = matches!(
+                    ui_state,
+                    iced_runtime::user_interface::State::Updated {
+                        redraw_request: iced_core::window::RedrawRequest::NextFrame,
+                        ..
+                    }
                 );
 
                 // Draw
@@ -686,7 +697,11 @@ where
                         bg,
                         || {},
                     ) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            if wants_next_frame {
+                                data.needs_rerender = true;
+                            }
+                        }
                         Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => {
                             running = false;
                         }
