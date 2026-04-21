@@ -9,6 +9,7 @@ pub(crate) mod lock_subscription;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
+pub(crate) mod subscription_channel;
 pub(crate) mod surface_manager;
 pub(crate) mod ui_builder;
 mod wayland_clipboard;
@@ -120,6 +121,7 @@ pub mod overlay {
 }
 
 pub mod widget {
+    pub use iced_runtime::widget::operation::{focus, focus_next, focus_previous, is_focused};
     pub use iced_widget::*;
 }
 
