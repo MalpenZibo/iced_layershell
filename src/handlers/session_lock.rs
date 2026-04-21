@@ -46,8 +46,14 @@ impl SessionLockHandler for WaylandState {
             if new_size.0 > 0 && new_size.1 > 0 {
                 data.size = new_size;
             }
+            let first_configure = !data.configured;
             data.configured = true;
-            self.surfaces_need_redraw.insert(data.id);
+            let surface_id = data.id;
+            self.surfaces_need_redraw.insert(surface_id);
+            if first_configure {
+                self.lock_events
+                    .push(SessionLockEvent::SurfaceConfigured(surface_id));
+            }
         }
     }
 }

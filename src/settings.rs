@@ -172,6 +172,10 @@ pub enum SessionLockEvent {
     Locked,
     /// Compositor denied (or later revoked) the lock. Give up.
     Finished,
+    /// A lock surface received its first compositor configure, so its iced
+    /// UI is now built and widget operations (e.g. focus) will find it.
+    /// Fires exactly once per lock surface.
+    SurfaceConfigured(SurfaceId),
 }
 
 /// Configuration for a layer shell surface.

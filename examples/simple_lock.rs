@@ -78,6 +78,7 @@ fn update(app: &mut App, msg: Msg) -> Task<Msg> {
             app.lock_surfaces.clear();
             Task::none()
         }
+        Msg::Lock(SessionLockEvent::SurfaceConfigured(_)) => Task::none(),
         Msg::KeyPressed(key) => {
             if app.locked && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                 app.locked = false;
