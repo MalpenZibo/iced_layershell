@@ -5,6 +5,7 @@ mod conversion;
 mod error;
 pub(crate) mod event_loop;
 pub(crate) mod handlers;
+pub(crate) mod lock_subscription;
 pub(crate) mod output_subscription;
 mod settings;
 mod state;
@@ -19,14 +20,16 @@ mod task_impl;
 // === Layer shell API ===
 pub use application::application;
 pub use error::Error;
+pub use lock_subscription::lock_events;
 pub use output_subscription::output_events;
 pub use settings::{
     Anchor, KeyboardInteractivity, Layer, LayerShellSettings, OutputEvent, OutputId, OutputInfo,
-    SurfaceId,
+    SessionLockEvent, SurfaceId,
 };
 pub use task_impl::{
-    InputRegionRect, destroy_layer_surface, new_layer_surface, set_anchor, set_exclusive_zone,
-    set_input_region, set_keyboard_interactivity, set_layer, set_margin, set_size,
+    InputRegionRect, destroy_layer_surface, lock_session, new_layer_surface, new_lock_surface,
+    set_anchor, set_exclusive_zone, set_input_region, set_keyboard_interactivity, set_layer,
+    set_margin, set_size, unlock_session,
 };
 
 // === Full iced public API re-export ===
@@ -122,9 +125,9 @@ pub mod widget {
 
 pub mod task {
     pub use crate::task_impl::{
-        InputRegionRect, Task, destroy_layer_surface, new_layer_surface, set_anchor,
-        set_exclusive_zone, set_input_region, set_keyboard_interactivity, set_layer, set_margin,
-        set_size,
+        InputRegionRect, Task, destroy_layer_surface, lock_session, new_layer_surface,
+        new_lock_surface, set_anchor, set_exclusive_zone, set_input_region,
+        set_keyboard_interactivity, set_layer, set_margin, set_size, unlock_session,
     };
     pub use iced_runtime::task::Handle;
 }

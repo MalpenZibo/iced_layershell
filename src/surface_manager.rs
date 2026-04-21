@@ -13,10 +13,24 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerSurface};
 use wayland_client::QueueHandle;
 
-use crate::settings::{LayerShellSettings, SurfaceId};
+use crate::settings::{LayerShellSettings, OutputId, SurfaceId};
 use crate::state::WaylandState;
-use crate::task_impl::LayerShellCommand;
+use crate::task_impl::{LayerShellCommand, SessionLockCommand};
 use crate::window_handle::WaylandWindow;
+
+/// Resolve a `SurfaceId` to the backing [`LayerSurface`]. Returns `None` (and
+/// logs) if the surface doesn't exist or has a non-layer role — layer-shell
+/// commands are meaningless for session-lock surfaces.
+fn get_layer_surface(state: &WaylandState, id: SurfaceId) -> Option<&LayerSurface> {
+    let wl = state.surface_id_map.get(&id)?;
+    let data = state.surfaces.get(wl)?;
+    if let Some(ls) = data.as_layer() {
+        Some(ls)
+    } else {
+        log::warn!("layer-shell command issued for non-layer surface {id}");
+        None
+    }
+}
 
 /// Per-surface iced rendering data.
 pub(crate) struct IcedSurface {
@@ -41,22 +55,18 @@ pub(crate) fn apply_layer_shell_command(
             state.closed_surfaces.push(id);
         }
         LayerShellCommand::SetAnchor(id, anchor) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_anchor(anchor.to_sctk());
-                data.layer_surface.wl_surface().commit();
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_anchor(anchor.to_sctk());
+                layer.wl_surface().commit();
             }
         }
-        LayerShellCommand::SetLayer(id, layer) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_layer(layer.to_sctk());
-                let wl_surf = data.layer_surface.wl_surface();
+        LayerShellCommand::SetLayer(id, layer_value) => {
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_layer(layer_value.to_sctk());
+                let wl_surf = layer.wl_surface();
                 // When hiding (Background), set empty input region so it
                 // doesn't intercept clicks meant for surfaces above it.
-                if layer == crate::settings::Layer::Background {
+                if layer_value == crate::settings::Layer::Background {
                     if let Ok(empty) =
                         smithay_client_toolkit::compositor::Region::new(&state.compositor)
                     {
@@ -69,42 +79,32 @@ pub(crate) fn apply_layer_shell_command(
             }
         }
         LayerShellCommand::SetExclusiveZone(id, zone) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_exclusive_zone(zone);
-                data.layer_surface.wl_surface().commit();
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_exclusive_zone(zone);
+                layer.wl_surface().commit();
             }
         }
         LayerShellCommand::SetKeyboardInteractivity(id, ki) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_keyboard_interactivity(ki.to_sctk());
-                data.layer_surface.wl_surface().commit();
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_keyboard_interactivity(ki.to_sctk());
+                layer.wl_surface().commit();
             }
         }
         LayerShellCommand::SetSize(id, (w, h)) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get_mut(wl)
-            {
-                data.layer_surface.set_size(w, h);
-                data.layer_surface.wl_surface().commit();
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_size(w, h);
+                layer.wl_surface().commit();
             }
         }
         LayerShellCommand::SetMargin(id, (top, right, bottom, left)) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                data.layer_surface.set_margin(top, right, bottom, left);
-                data.layer_surface.wl_surface().commit();
+            if let Some(layer) = get_layer_surface(state, id) {
+                layer.set_margin(top, right, bottom, left);
+                layer.wl_surface().commit();
             }
         }
         LayerShellCommand::SetInputRegion(id, rects) => {
-            if let Some(wl) = state.surface_id_map.get(&id)
-                && let Some(data) = state.surfaces.get(wl)
-            {
-                let wl_surf = data.layer_surface.wl_surface();
+            if let Some(layer) = get_layer_surface(state, id) {
+                let wl_surf = layer.wl_surface();
                 match rects {
                     None => {
                         wl_surf.set_input_region(None);
@@ -134,7 +134,101 @@ pub(crate) fn flush_pending_creations(
 ) {
     while let Some((id, settings)) = pending.pop() {
         let layer = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
-        wl.register_surface(id, layer);
+        wl.register_layer_surface(id, layer);
+    }
+}
+
+/// Apply a synchronous session-lock command (lock/unlock, create lock surface).
+pub(crate) fn apply_session_lock_command(
+    cmd: SessionLockCommand,
+    state: &mut WaylandState,
+    pending_lock_surfaces: &mut Vec<(SurfaceId, OutputId)>,
+    qh: &QueueHandle<WaylandState>,
+) {
+    match cmd {
+        SessionLockCommand::Lock => {
+            if state.active_lock.is_some() {
+                log::warn!("lock_session() called while a lock is already active; ignoring");
+                return;
+            }
+            match state.session_lock.lock(qh) {
+                Ok(lock) => {
+                    // Keep the SessionLock alive; the handler will confirm.
+                    state.active_lock = Some(lock);
+                }
+                Err(e) => {
+                    log::error!(
+                        "session-lock manager unavailable ({e}); compositor likely lacks ext-session-lock-v1"
+                    );
+                    // Surface a Finished event so the app can bail cleanly.
+                    state
+                        .lock_events
+                        .push(crate::settings::SessionLockEvent::Finished);
+                }
+            }
+        }
+        SessionLockCommand::NewSurface(id, output) => {
+            if state.active_lock.is_none() {
+                log::warn!(
+                    "new_lock_surface({id}) called without an active lock; ignoring — did you wait for SessionLockEvent::Locked?"
+                );
+                return;
+            }
+            pending_lock_surfaces.push((id, output));
+        }
+        SessionLockCommand::Unlock => {
+            if let Some(lock) = state.active_lock.take() {
+                // Mark every lock surface as closed so the main loop tears down
+                // its iced rendering resources. The compositor destroys the
+                // underlying wayland objects when the lock is dropped.
+                let lock_ids: Vec<SurfaceId> = state
+                    .surfaces
+                    .values()
+                    .filter(|d| matches!(d.role, crate::state::SurfaceRole::Lock(_)))
+                    .map(|d| d.id)
+                    .collect();
+                state.closed_surfaces.extend(lock_ids);
+                lock.unlock();
+            } else {
+                log::warn!("unlock_session() called with no active lock; ignoring");
+            }
+        }
+    }
+}
+
+/// Flush pending lock-surface creations. Requires an active lock.
+pub(crate) fn flush_pending_lock_surfaces(
+    wl: &mut WaylandState,
+    pending: &mut Vec<(SurfaceId, OutputId)>,
+    qh: &QueueHandle<WaylandState>,
+) {
+    while let Some((id, output_id)) = pending.pop() {
+        let Some(lock) = wl.active_lock.clone() else {
+            log::warn!("lost active lock while creating surface {id}; dropping");
+            continue;
+        };
+        let Some(wl_output) = wl
+            .outputs
+            .iter()
+            .find(|(_, info)| info.id == output_id)
+            .map(|(o, _)| o.clone())
+        else {
+            log::warn!("unknown output {output_id} for lock surface {id}; dropping");
+            continue;
+        };
+        let surface = wl.compositor.create_surface(qh);
+        let lock_surface = lock.create_lock_surface(surface, &wl_output, qh);
+
+        // Mirror layer-shell HiDPI setup: match buffer scale to the target output.
+        let scale = wl
+            .outputs
+            .get(&wl_output)
+            .map_or(1, |info| info.scale_factor);
+        if scale > 1 {
+            lock_surface.wl_surface().set_buffer_scale(scale);
+        }
+
+        wl.register_lock_surface(id, lock_surface);
     }
 }
 
