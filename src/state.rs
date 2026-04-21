@@ -207,6 +207,27 @@ impl WaylandState {
         self.surfaces.get(wl_surface).map(|d| d.id)
     }
 
+    /// Look up the `WlOutput` for an `OutputId`.
+    pub fn wl_output_for(&self, id: OutputId) -> Option<WlOutput> {
+        self.outputs
+            .iter()
+            .find(|(_, info)| info.id == id)
+            .map(|(o, _)| o.clone())
+    }
+
+    /// Mark every session-lock surface as closed. The main loop tears down
+    /// iced rendering resources; the compositor destroys the underlying
+    /// wayland objects when the `SessionLock` is dropped.
+    pub fn close_all_lock_surfaces(&mut self) {
+        let ids: Vec<SurfaceId> = self
+            .surfaces
+            .values()
+            .filter(|d| matches!(d.role, SurfaceRole::Lock(_)))
+            .map(|d| d.id)
+            .collect();
+        self.closed_surfaces.extend(ids);
+    }
+
     /// Set the cursor shape based on mouse interaction.
     pub fn set_cursor_shape(
         &mut self,

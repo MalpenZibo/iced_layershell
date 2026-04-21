@@ -153,14 +153,12 @@ pub(crate) fn apply_session_lock_command(
             }
             match state.session_lock.lock(qh) {
                 Ok(lock) => {
-                    // Keep the SessionLock alive; the handler will confirm.
                     state.active_lock = Some(lock);
                 }
                 Err(e) => {
                     log::error!(
                         "session-lock manager unavailable ({e}); compositor likely lacks ext-session-lock-v1"
                     );
-                    // Surface a Finished event so the app can bail cleanly.
                     state
                         .lock_events
                         .push(crate::settings::SessionLockEvent::Finished);
@@ -178,16 +176,7 @@ pub(crate) fn apply_session_lock_command(
         }
         SessionLockCommand::Unlock => {
             if let Some(lock) = state.active_lock.take() {
-                // Mark every lock surface as closed so the main loop tears down
-                // its iced rendering resources. The compositor destroys the
-                // underlying wayland objects when the lock is dropped.
-                let lock_ids: Vec<SurfaceId> = state
-                    .surfaces
-                    .values()
-                    .filter(|d| matches!(d.role, crate::state::SurfaceRole::Lock(_)))
-                    .map(|d| d.id)
-                    .collect();
-                state.closed_surfaces.extend(lock_ids);
+                state.close_all_lock_surfaces();
                 lock.unlock();
             } else {
                 log::warn!("unlock_session() called with no active lock; ignoring");
@@ -207,19 +196,13 @@ pub(crate) fn flush_pending_lock_surfaces(
             log::warn!("lost active lock while creating surface {id}; dropping");
             continue;
         };
-        let Some(wl_output) = wl
-            .outputs
-            .iter()
-            .find(|(_, info)| info.id == output_id)
-            .map(|(o, _)| o.clone())
-        else {
+        let Some(wl_output) = wl.wl_output_for(output_id) else {
             log::warn!("unknown output {output_id} for lock surface {id}; dropping");
             continue;
         };
         let surface = wl.compositor.create_surface(qh);
         let lock_surface = lock.create_lock_surface(surface, &wl_output, qh);
 
-        // Mirror layer-shell HiDPI setup: match buffer scale to the target output.
         let scale = wl
             .outputs
             .get(&wl_output)
@@ -242,14 +225,7 @@ pub(crate) fn create_layer_surface(
 ) -> LayerSurface {
     let surface = compositor_state.create_surface(qh);
 
-    // Resolve OutputId → WlOutput for targeting a specific monitor
-    let wl_output = settings.output.and_then(|output_id| {
-        wl_state
-            .outputs
-            .iter()
-            .find(|(_, info)| info.id == output_id)
-            .map(|(wl_output, _)| wl_output.clone())
-    });
+    let wl_output = settings.output.and_then(|id| wl_state.wl_output_for(id));
 
     let layer_surface = layer_shell_state.create_layer_surface(
         qh,

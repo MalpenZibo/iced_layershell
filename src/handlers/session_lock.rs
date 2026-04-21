@@ -14,8 +14,10 @@ use crate::settings::SessionLockEvent;
 use crate::state::WaylandState;
 
 impl SessionLockHandler for WaylandState {
-    fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, session_lock: SessionLock) {
-        self.active_lock = Some(session_lock);
+    fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session_lock: SessionLock) {
+        // active_lock is written by apply_session_lock_command::Lock so that a
+        // synchronous double-lock check can reject the second call. The handle
+        // passed here is the same Arc-backed grant, so no need to overwrite.
         self.lock_events.push(SessionLockEvent::Locked);
     }
 
@@ -25,17 +27,8 @@ impl SessionLockHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _session_lock: SessionLock,
     ) {
-        // Drop our handle so the lock can never be accidentally re-used, and
-        // tear down any lock surfaces we created — the compositor has revoked
-        // the lock (or denied it in the first place).
         self.active_lock = None;
-        let lock_ids: Vec<crate::settings::SurfaceId> = self
-            .surfaces
-            .values()
-            .filter(|d| matches!(d.role, crate::state::SurfaceRole::Lock(_)))
-            .map(|d| d.id)
-            .collect();
-        self.closed_surfaces.extend(lock_ids);
+        self.close_all_lock_surfaces();
         self.lock_events.push(SessionLockEvent::Finished);
     }
 

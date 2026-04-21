@@ -171,8 +171,6 @@ where
         CompositorState::bind(&globals, &qh).map_err(|e| Error::EventLoop(e.to_string()))?;
     let layer_shell_state =
         LayerShell::bind(&globals, &qh).map_err(|_| Error::LayerShellNotSupported)?;
-    // SessionLockState uses a GlobalProxy that binds lazily — compositors
-    // without ext-session-lock-v1 simply produce errors on first use.
     let session_lock_state = SessionLockState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
     let output_state = OutputState::new(&globals, &qh);
