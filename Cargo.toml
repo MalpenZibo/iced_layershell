@@ -52,7 +52,7 @@ default = ["wgpu", "thread-pool"]
 
 # Renderer backends
 wgpu = ["iced_renderer/wgpu", "iced_renderer/wgpu-bare"]
-tiny-skia = ["iced_renderer/tiny-skia"]
+tiny-skia = ["iced_renderer/tiny-skia", "iced_renderer/wayland"]
 
 # Async executors
 tokio = ["iced_futures/tokio"]
