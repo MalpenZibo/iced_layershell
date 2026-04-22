@@ -705,6 +705,51 @@ where
                         Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => {
                             running = false;
                         }
+                        Err(
+                            err @ (iced_graphics::compositor::SurfaceError::Outdated
+                            | iced_graphics::compositor::SurfaceError::Lost),
+                        ) => {
+                            // The wgpu surface can become invalid at any time
+                            // (compositor restart, output change); reconfigure or
+                            // recreate it and schedule a redraw, otherwise we'd
+                            // stay frozen on a dead surface.
+                            let size = iced_s.viewport.physical_size();
+                            let recovered =
+                                if matches!(err, iced_graphics::compositor::SurfaceError::Lost) {
+                                    match WaylandWindow::new(
+                                        wl_state.display_ptr,
+                                        data.layer_surface.wl_surface(),
+                                    ) {
+                                        Some(window) => {
+                                            iced_s.surface = compositor.create_surface(
+                                                window,
+                                                size.width,
+                                                size.height,
+                                            );
+                                            true
+                                        }
+                                        None => false,
+                                    }
+                                } else {
+                                    compositor.configure_surface(
+                                        &mut iced_s.surface,
+                                        size.width,
+                                        size.height,
+                                    );
+                                    true
+                                };
+                            data.frame_pending = false;
+                            // Only reschedule on recovery — otherwise we'd loop
+                            // presenting on a dead surface and burn CPU.
+                            if recovered {
+                                iced_s.needs_redraw = true;
+                            } else {
+                                log::error!(
+                                    "failed to recreate wgpu surface after Lost; \
+                                     surface left dead"
+                                );
+                            }
+                        }
                         Err(_) => {
                             data.frame_pending = false;
                         }
