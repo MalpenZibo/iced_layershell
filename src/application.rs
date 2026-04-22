@@ -19,7 +19,7 @@ use smithay_client_toolkit::data_device_manager::DataDeviceManagerState;
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
-use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::session_lock::SessionLockState;
 use smithay_client_toolkit::shell::wlr_layer::LayerShell;
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
@@ -30,7 +30,7 @@ use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
 use crate::surface_manager::{
     IcedSurface, apply_layer_shell_command, create_layer_surface, flush_pending_creations,
-    scaled_cursor, sync_iced_surfaces,
+    flush_pending_lock_surfaces, scaled_cursor, sync_iced_surfaces,
 };
 use crate::task_impl::Task;
 use crate::ui_builder::{build_single_ui, build_user_interfaces};
@@ -155,6 +155,7 @@ where
     let initial_settings = app.initial_settings.ok_or(Error::NoSettings)?;
 
     crate::output_subscription::init();
+    crate::lock_subscription::init();
 
     let conn = Connection::connect_to_env()?;
     let display_ptr = conn.backend().display_ptr().cast::<std::ffi::c_void>();
@@ -170,6 +171,7 @@ where
         CompositorState::bind(&globals, &qh).map_err(|e| Error::EventLoop(e.to_string()))?;
     let layer_shell_state =
         LayerShell::bind(&globals, &qh).map_err(|_| Error::LayerShellNotSupported)?;
+    let session_lock_state = SessionLockState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
     let output_state = OutputState::new(&globals, &qh);
     let registry_state = RegistryState::new(&globals);
@@ -190,6 +192,7 @@ where
         registry_state,
         compositor_state,
         layer_shell_state,
+        session_lock_state,
         seat_state,
         output_state,
         data_device_manager,
@@ -206,7 +209,7 @@ where
         &initial_settings,
         &wl_state,
     );
-    wl_state.register_surface(SurfaceId::MAIN, initial_layer);
+    wl_state.register_layer_surface(SurfaceId::MAIN, initial_layer);
 
     // Roundtrip to get initial configure
     event_queue
@@ -303,11 +306,13 @@ where
 
     // Process boot task (no UIs exist yet, so sync actions are discarded)
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+    let mut pending_lock_surfaces: Vec<(SurfaceId, crate::settings::OutputId)> = Vec::new();
     let _ = process_task(
         boot_task,
         &mut wl_state,
         &mut runtime,
         &mut pending_creations,
+        &mut pending_lock_surfaces,
         &qh,
         &exit_flag,
         &ping,
@@ -315,6 +320,7 @@ where
 
     // Create surfaces requested during boot
     flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
+    flush_pending_lock_surfaces(&mut wl_state, &mut pending_lock_surfaces, &qh);
 
     // Roundtrip so new surfaces get configured
     event_queue
@@ -346,6 +352,7 @@ where
     let mut all_messages: Vec<Message> = Vec::new();
     let mut surface_ids: Vec<SurfaceId> = Vec::new();
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+    let mut pending_lock_surfaces: Vec<(SurfaceId, crate::settings::OutputId)> = Vec::new();
 
     let mut first_frame = true;
     while running {
@@ -408,6 +415,7 @@ where
         }
 
         crate::output_subscription::push_events(mem::take(&mut wl_state.output_events));
+        crate::lock_subscription::push_events(mem::take(&mut wl_state.lock_events));
 
         let app_scale = app.scale_factor_fn.as_ref().map_or(1.0, |f| f(&user_state)) as f32;
 
@@ -538,6 +546,7 @@ where
         }
 
         pending_creations.clear();
+        pending_lock_surfaces.clear();
         if !all_messages.is_empty() {
             // Drop all UIs before mutating state (same as iced_winit)
             let caches: HashMap<SurfaceId, user_interface::Cache> =
@@ -554,6 +563,7 @@ where
                     &mut wl_state,
                     &mut runtime,
                     &mut pending_creations,
+                    &mut pending_lock_surfaces,
                     &qh,
                     &exit_flag,
                     &ping,
@@ -599,6 +609,7 @@ where
 
         // Create newly requested surfaces
         flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
+        flush_pending_lock_surfaces(&mut wl_state, &mut pending_lock_surfaces, &qh);
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
         // Build UIs for newly created surfaces
@@ -686,7 +697,7 @@ where
                     data.needs_rerender = true;
                 } else {
                     let bg = iced_core::Color::TRANSPARENT;
-                    let wl_surf = data.layer_surface.wl_surface();
+                    let wl_surf = data.wl_surface();
                     wl_surf.frame(&qh, wl_surf.clone());
                     data.frame_pending = true;
 
@@ -724,6 +735,7 @@ where
 
             // Process messages produced during RedrawRequested
             pending_creations.clear();
+            pending_lock_surfaces.clear();
             let caches: HashMap<SurfaceId, user_interface::Cache> =
                 ManuallyDrop::into_inner(user_interfaces)
                     .into_iter()
@@ -738,6 +750,7 @@ where
                     &mut wl_state,
                     &mut runtime,
                     &mut pending_creations,
+                    &mut pending_lock_surfaces,
                     &qh,
                     &exit_flag,
                     &ping,
@@ -776,6 +789,7 @@ where
             }
 
             flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
+            flush_pending_lock_surfaces(&mut wl_state, &mut pending_lock_surfaces, &qh);
             sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
 
             // Mark all surfaces for redraw
@@ -851,12 +865,14 @@ fn run_action<Message: std::fmt::Debug>(
     }
 }
 
-/// Route a [`Task`] to the appropriate handler: layer shell commands go to
-/// [`apply_layer_shell_command`], iced tasks are spawned on the async runtime.
+/// Route a [`Task`] to the appropriate handler: layer shell / session lock
+/// commands go to their respective appliers, iced tasks are spawned on the
+/// async runtime.
 ///
 /// Immediately-ready actions (widget operations, clipboard, etc.) are polled
 /// synchronously and returned to the caller for processing — matching
 /// `iced_winit`'s behaviour. Only the async remainder is handed to `runtime.run()`.
+#[allow(clippy::too_many_arguments)]
 fn process_task<M: Send + Clone + 'static>(
     task: Task<M>,
     wl_state: &mut WaylandState,
@@ -866,6 +882,7 @@ fn process_task<M: Send + Clone + 'static>(
         Action<M>,
     >,
     pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
+    pending_lock_surfaces: &mut Vec<(SurfaceId, crate::settings::OutputId)>,
     qh: &wayland_client::QueueHandle<WaylandState>,
     exit_flag: &Arc<AtomicBool>,
     ping: &calloop::ping::Ping,
@@ -874,6 +891,14 @@ fn process_task<M: Send + Clone + 'static>(
     match task {
         Task::LayerShell(cmd) => {
             apply_layer_shell_command(cmd, wl_state, pending_creations, qh);
+        }
+        Task::SessionLock(cmd) => {
+            crate::surface_manager::apply_session_lock_command(
+                cmd,
+                wl_state,
+                pending_lock_surfaces,
+                qh,
+            );
         }
         Task::Iced(iced_task) => {
             if let Some(mut stream) = iced_runtime::task::into_stream(iced_task) {
@@ -914,6 +939,7 @@ fn process_task<M: Send + Clone + 'static>(
                     wl_state,
                     runtime,
                     pending_creations,
+                    pending_lock_surfaces,
                     qh,
                     exit_flag,
                     ping,

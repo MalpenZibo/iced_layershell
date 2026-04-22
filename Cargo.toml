@@ -83,3 +83,7 @@ path = "examples/bar_with_menu.rs"
 [[example]]
 name = "simple_bar"
 path = "examples/simple_bar.rs"
+
+[[example]]
+name = "simple_lock"
+path = "examples/simple_lock.rs"

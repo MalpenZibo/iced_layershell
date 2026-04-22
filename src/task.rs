@@ -1,4 +1,6 @@
-use crate::settings::{Anchor, KeyboardInteractivity, Layer, LayerShellSettings, SurfaceId};
+use crate::settings::{
+    Anchor, KeyboardInteractivity, Layer, LayerShellSettings, OutputId, SurfaceId,
+};
 
 /// A rectangle within a surface's coordinate space, used for input region specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,15 +26,31 @@ pub enum LayerShellCommand {
     SetInputRegion(SurfaceId, Option<Vec<InputRegionRect>>),
 }
 
-/// A task that can be either a standard iced task or a layer shell command.
+/// A command to drive the `ext-session-lock-v1` protocol.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionLockCommand {
+    /// Request a session lock from the compositor. The lifecycle is reported
+    /// via the [`lock_events()`](crate::lock_events) subscription.
+    Lock,
+    /// Create a per-output lock surface. Requires that the lock was granted
+    /// (i.e. after receiving [`SessionLockEvent::Locked`](crate::SessionLockEvent::Locked)).
+    NewSurface(SurfaceId, OutputId),
+    /// Unlock the session and destroy the lock. All lock surfaces are torn down.
+    Unlock,
+}
+
+/// A task that can be either a standard iced task or a shell-protocol command.
 ///
-/// This wraps iced's `Task<M>` to also support layer shell commands,
-/// giving an API identical to the pop-os iced fork without modifying iced.
+/// This wraps iced's `Task<M>` to also support layer shell and session lock
+/// commands, giving an API identical to the pop-os iced fork without modifying
+/// iced.
 pub enum Task<M> {
     /// A standard iced runtime task (async work, subscriptions, etc.)
     Iced(iced_runtime::Task<M>),
     /// A layer shell command (applied synchronously by the event loop).
     LayerShell(LayerShellCommand),
+    /// A session-lock command (applied synchronously by the event loop).
+    SessionLock(SessionLockCommand),
     /// Multiple tasks batched together.
     Batch(Vec<Task<M>>),
 }
@@ -82,6 +100,7 @@ impl<M> Task<M> {
         match self {
             Self::Iced(t) => Task::Iced(t.map(f)),
             Self::LayerShell(cmd) => Task::LayerShell(cmd),
+            Self::SessionLock(cmd) => Task::SessionLock(cmd),
             Self::Batch(tasks) => {
                 Task::Batch(tasks.into_iter().map(|t| t.map(f.clone())).collect())
             }
@@ -130,6 +149,7 @@ impl<M> Task<M> {
         match self {
             Self::Iced(t) => Task::Iced(t.discard()),
             Self::LayerShell(cmd) => Task::LayerShell(cmd),
+            Self::SessionLock(cmd) => Task::SessionLock(cmd),
             Self::Batch(tasks) => Task::Batch(tasks.into_iter().map(Task::discard).collect()),
         }
     }
@@ -201,6 +221,36 @@ pub fn set_margin<M>(id: SurfaceId, margin: (i32, i32, i32, i32)) -> Task<M> {
 #[must_use]
 pub fn set_input_region<M>(id: SurfaceId, rects: Option<Vec<InputRegionRect>>) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetInputRegion(id, rects))
+}
+
+/// Request a session lock (`ext-session-lock-v1`).
+///
+/// Subscribe to [`lock_events()`](crate::lock_events) to observe the outcome:
+/// [`Locked`](crate::SessionLockEvent::Locked) means the lock was granted and
+/// per-output surfaces may be created via [`new_lock_surface`];
+/// [`Finished`](crate::SessionLockEvent::Finished) means the compositor denied
+/// the request.
+#[must_use]
+pub fn lock_session<M>() -> Task<M> {
+    Task::SessionLock(SessionLockCommand::Lock)
+}
+
+/// Create a lock surface on the given output. Must be called only after a
+/// successful [`SessionLockEvent::Locked`](crate::SessionLockEvent::Locked).
+/// Returns the assigned [`SurfaceId`] and the task to register it.
+#[must_use]
+pub fn new_lock_surface<M>(output: OutputId) -> (SurfaceId, Task<M>) {
+    let id = SurfaceId::unique();
+    (
+        id,
+        Task::SessionLock(SessionLockCommand::NewSurface(id, output)),
+    )
+}
+
+/// Unlock the session and destroy all lock surfaces.
+#[must_use]
+pub fn unlock_session<M>() -> Task<M> {
+    Task::SessionLock(SessionLockCommand::Unlock)
 }
 
 #[cfg(test)]

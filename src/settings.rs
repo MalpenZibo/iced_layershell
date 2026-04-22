@@ -159,6 +159,25 @@ pub enum OutputEvent {
     InfoChanged(OutputInfo),
 }
 
+/// Events related to the `ext-session-lock-v1` lifecycle.
+///
+/// Delivered via the [`lock_events()`](crate::lock_events) subscription.
+/// After requesting a lock with [`lock_session()`](crate::task::lock_session),
+/// wait for [`Locked`](Self::Locked) before creating per-output lock surfaces.
+/// [`Finished`](Self::Finished) means the compositor denied or revoked the
+/// lock — the app must give up and not render lock surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionLockEvent {
+    /// Compositor granted the lock. Safe to create per-output lock surfaces.
+    Locked,
+    /// Compositor denied (or later revoked) the lock. Give up.
+    Finished,
+    /// A lock surface received its first compositor configure, so its iced
+    /// UI is now built and widget operations (e.g. focus) will find it.
+    /// Fires exactly once per lock surface.
+    SurfaceConfigured(SurfaceId),
+}
+
 /// Configuration for a layer shell surface.
 #[derive(Debug, Clone)]
 pub struct LayerShellSettings {

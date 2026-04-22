@@ -14,6 +14,7 @@ use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
+use smithay_client_toolkit::session_lock::{SessionLock, SessionLockState, SessionLockSurface};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerSurface};
 use wayland_client::protocol::wl_output::WlOutput;
@@ -21,12 +22,29 @@ use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, QueueHandle};
 
-use crate::settings::{OutputEvent, OutputId, OutputInfo, SurfaceId};
+use crate::settings::{OutputEvent, OutputId, OutputInfo, SessionLockEvent, SurfaceId};
+
+/// A surface's shell role — layer shell (bar/menu/overlay) or session lock
+/// (screen locker). Both carry the underlying `WlSurface`.
+pub(crate) enum SurfaceRole {
+    Layer(LayerSurface),
+    Lock(SessionLockSurface),
+}
+
+impl SurfaceRole {
+    /// The Wayland surface backing this role.
+    pub fn wl_surface(&self) -> &WlSurface {
+        match self {
+            Self::Layer(ls) => ls.wl_surface(),
+            Self::Lock(ls) => ls.wl_surface(),
+        }
+    }
+}
 
 /// Per-surface Wayland data.
 pub(crate) struct SurfaceData {
     pub id: SurfaceId,
-    pub layer_surface: LayerSurface,
+    pub role: SurfaceRole,
     pub size: (u32, u32),
     pub scale_factor: i32,
     pub configured: bool,
@@ -36,17 +54,36 @@ pub(crate) struct SurfaceData {
     pub needs_rerender: bool,
 }
 
+impl SurfaceData {
+    /// Shortcut to the backing `WlSurface`.
+    pub fn wl_surface(&self) -> &WlSurface {
+        self.role.wl_surface()
+    }
+
+    /// Returns the layer surface if this is a layer role, else `None`.
+    pub fn as_layer(&self) -> Option<&LayerSurface> {
+        match &self.role {
+            SurfaceRole::Layer(ls) => Some(ls),
+            SurfaceRole::Lock(_) => None,
+        }
+    }
+}
+
 /// Central Wayland state, holding all SCTK protocol states and event queues.
 pub(crate) struct WaylandState {
     pub registry: RegistryState,
     pub compositor: CompositorState,
     pub layer_shell: LayerShell,
+    pub session_lock: SessionLockState,
     pub seat: SeatState,
     pub output: OutputState,
 
     // Surface tracking
     pub surfaces: HashMap<WlSurface, SurfaceData>,
     pub surface_id_map: HashMap<SurfaceId, WlSurface>,
+
+    /// Active session lock, `Some` between `Locked` and `unlock_and_destroy`.
+    pub active_lock: Option<SessionLock>,
 
     // Input state
     pub cursor_position: iced_core::Point,
@@ -57,6 +94,7 @@ pub(crate) struct WaylandState {
     // Event queues (drained each frame by the application runner)
     pub pending_events: Vec<(SurfaceId, iced_core::Event)>,
     pub output_events: Vec<OutputEvent>,
+    pub lock_events: Vec<SessionLockEvent>,
     pub surfaces_need_redraw: HashSet<SurfaceId>,
     pub closed_surfaces: Vec<SurfaceId>,
 
@@ -93,6 +131,7 @@ impl WaylandState {
         registry: RegistryState,
         compositor: CompositorState,
         layer_shell: LayerShell,
+        session_lock: SessionLockState,
         seat: SeatState,
         output: OutputState,
         data_device_manager: DataDeviceManagerState,
@@ -105,16 +144,19 @@ impl WaylandState {
             registry,
             compositor,
             layer_shell,
+            session_lock,
             seat,
             output,
             surfaces: HashMap::new(),
             surface_id_map: HashMap::new(),
+            active_lock: None,
             cursor_position: iced_core::Point::ORIGIN,
             pointer_surface: None,
             keyboard_focus: None,
             modifiers: iced_core::keyboard::Modifiers::empty(),
             pending_events: Vec::new(),
             output_events: Vec::new(),
+            lock_events: Vec::new(),
             surfaces_need_redraw: HashSet::new(),
             closed_surfaces: Vec::new(),
             outputs: HashMap::new(),
@@ -133,13 +175,23 @@ impl WaylandState {
     }
 
     /// Register a new layer surface with the given ID.
-    pub fn register_surface(&mut self, id: SurfaceId, layer_surface: LayerSurface) {
+    pub fn register_layer_surface(&mut self, id: SurfaceId, layer_surface: LayerSurface) {
         let wl_surface = layer_surface.wl_surface().clone();
+        self.register_with_role(id, wl_surface, SurfaceRole::Layer(layer_surface));
+    }
+
+    /// Register a new session-lock surface with the given ID.
+    pub fn register_lock_surface(&mut self, id: SurfaceId, lock_surface: SessionLockSurface) {
+        let wl_surface = lock_surface.wl_surface().clone();
+        self.register_with_role(id, wl_surface, SurfaceRole::Lock(lock_surface));
+    }
+
+    fn register_with_role(&mut self, id: SurfaceId, wl_surface: WlSurface, role: SurfaceRole) {
         self.surfaces.insert(
             wl_surface.clone(),
             SurfaceData {
                 id,
-                layer_surface,
+                role,
                 size: (0, 0),
                 scale_factor: 1,
                 configured: false,
@@ -153,6 +205,27 @@ impl WaylandState {
     /// Get the `SurfaceId` for a given Wayland surface.
     pub fn surface_id_for(&self, wl_surface: &WlSurface) -> Option<SurfaceId> {
         self.surfaces.get(wl_surface).map(|d| d.id)
+    }
+
+    /// Look up the `WlOutput` for an `OutputId`.
+    pub fn wl_output_for(&self, id: OutputId) -> Option<WlOutput> {
+        self.outputs
+            .iter()
+            .find(|(_, info)| info.id == id)
+            .map(|(o, _)| o.clone())
+    }
+
+    /// Mark every session-lock surface as closed. The main loop tears down
+    /// iced rendering resources; the compositor destroys the underlying
+    /// wayland objects when the `SessionLock` is dropped.
+    pub fn close_all_lock_surfaces(&mut self) {
+        let ids: Vec<SurfaceId> = self
+            .surfaces
+            .values()
+            .filter(|d| matches!(d.role, SurfaceRole::Lock(_)))
+            .map(|d| d.id)
+            .collect();
+        self.closed_surfaces.extend(ids);
     }
 
     /// Set the cursor shape based on mouse interaction.
