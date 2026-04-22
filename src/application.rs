@@ -154,6 +154,14 @@ where
 {
     let initial_settings = app.initial_settings.ok_or(Error::NoSettings)?;
 
+    // Layer-shell UIs (bars, overlays) want the integrated GPU; the wgpu default
+    // wakes the discrete one on hybrid laptops. User can still override with
+    // WGPU_POWER_PREF=high.
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        // Safety: no other threads have been spawned yet in this process by us.
+        unsafe { std::env::set_var("WGPU_POWER_PREF", "low") };
+    }
+
     crate::output_subscription::init();
 
     let conn = Connection::connect_to_env()?;
