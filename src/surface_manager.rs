@@ -133,19 +133,20 @@ pub(crate) fn flush_pending_creations(
     qh: &QueueHandle<WaylandState>,
 ) {
     while let Some((id, settings)) = pending.pop() {
-        let layer = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
-        wl.register_surface(id, layer);
+        let (layer, scale) = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
+        wl.register_surface(id, layer, scale);
     }
 }
 
 /// Create a new Wayland layer surface from settings, targeting a specific output if configured.
+/// Returns the layer surface together with the initial buffer scale applied to it.
 pub(crate) fn create_layer_surface(
     compositor_state: &CompositorState,
     layer_shell_state: &LayerShell,
     qh: &QueueHandle<WaylandState>,
     settings: &LayerShellSettings,
     wl_state: &WaylandState,
-) -> LayerSurface {
+) -> (LayerSurface, i32) {
     let surface = compositor_state.create_surface(qh);
 
     // Resolve OutputId → WlOutput for targeting a specific monitor
@@ -186,25 +187,22 @@ pub(crate) fn create_layer_surface(
             .set_input_region(Some(empty.wl_region()));
     }
 
-    // Set buffer scale for HiDPI — matches the target output or first available
+    // Set buffer scale for HiDPI: when the target output is known, use its
+    // scale; otherwise default to 1 and rely on `wl_surface.enter` /
+    // `preferred_buffer_scale` to correct it. Picking an arbitrary output's
+    // scale here would mismatch the compositor's choice on multi-monitor
+    // setups with different scales.
     let scale = wl_output
         .as_ref()
         .and_then(|wo| wl_state.outputs.get(wo))
         .map(|info| info.scale_factor)
-        .or_else(|| {
-            wl_state
-                .outputs
-                .values()
-                .next()
-                .map(|info| info.scale_factor)
-        })
         .unwrap_or(1);
     if scale > 1 {
         layer_surface.wl_surface().set_buffer_scale(scale);
     }
 
     layer_surface.commit();
-    layer_surface
+    (layer_surface, scale)
 }
 
 /// Create a scaled cursor for the given surface.
