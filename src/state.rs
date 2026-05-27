@@ -34,6 +34,10 @@ pub(crate) struct SurfaceData {
     /// Set when we drew but couldn't present (`frame_pending` was true).
     /// Frame callback will trigger a redraw to flush the pending visual.
     pub needs_rerender: bool,
+    /// Output the surface is currently mapped on, set from `wl_surface.enter`
+    /// events. `None` until the compositor maps the surface (or after a
+    /// `wl_surface.leave` if not re-entered).
+    pub current_output: Option<OutputId>,
 }
 
 /// Central Wayland state, holding all SCTK protocol states and event queues.
@@ -132,8 +136,16 @@ impl WaylandState {
         }
     }
 
-    /// Register a new layer surface with the given ID.
-    pub fn register_surface(&mut self, id: SurfaceId, layer_surface: LayerSurface) {
+    /// Register a new layer surface with the given ID and initial buffer scale.
+    /// `scale_factor` must match whatever was applied via
+    /// `wl_surface.set_buffer_scale` at creation, so the renderer and the
+    /// compositor agree on the buffer's coordinate system.
+    pub fn register_surface(
+        &mut self,
+        id: SurfaceId,
+        layer_surface: LayerSurface,
+        scale_factor: i32,
+    ) {
         let wl_surface = layer_surface.wl_surface().clone();
         self.surfaces.insert(
             wl_surface.clone(),
@@ -141,10 +153,11 @@ impl WaylandState {
                 id,
                 layer_surface,
                 size: (0, 0),
-                scale_factor: 1,
+                scale_factor,
                 configured: false,
                 frame_pending: false,
                 needs_rerender: false,
+                current_output: None,
             },
         );
         self.surface_id_map.insert(id, wl_surface);

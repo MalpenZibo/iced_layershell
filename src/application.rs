@@ -207,14 +207,14 @@ where
     wl_state.cursor_shape_manager = cursor_shape_manager;
 
     // Create initial layer surface (SurfaceId::MAIN)
-    let initial_layer = create_layer_surface(
+    let (initial_layer, initial_scale) = create_layer_surface(
         &wl_state.compositor,
         &wl_state.layer_shell,
         &qh,
         &initial_settings,
         &wl_state,
     );
-    wl_state.register_surface(SurfaceId::MAIN, initial_layer);
+    wl_state.register_surface(SurfaceId::MAIN, initial_layer, initial_scale);
 
     // Roundtrip to get initial configure
     event_queue

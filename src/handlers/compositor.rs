@@ -9,6 +9,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, QueueHandle};
 
+use crate::settings::OutputEvent;
 use crate::state::WaylandState;
 
 impl CompositorHandler for WaylandState {
@@ -58,18 +59,59 @@ impl CompositorHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &WlSurface,
-        _output: &WlOutput,
+        surface: &WlSurface,
+        output: &WlOutput,
     ) {
+        let Some((output_id, output_scale)) = self
+            .outputs
+            .get(output)
+            .map(|info| (info.id, info.scale_factor))
+        else {
+            return;
+        };
+        let Some(data) = self.surfaces.get_mut(surface) else {
+            return;
+        };
+        // Some compositors deliver `preferred_buffer_scale` only after a first
+        // commit; using the entered output's known scale here avoids a brief
+        // wrong-scale render.
+        if data.scale_factor != output_scale {
+            data.scale_factor = output_scale;
+            surface.set_buffer_scale(output_scale);
+            self.surfaces_need_redraw.insert(data.id);
+        }
+        // Compositors can refire `enter` on commit — only emit when the output
+        // actually changes so subscribers don't see redundant updates.
+        if data.current_output == Some(output_id) {
+            return;
+        }
+        data.current_output = Some(output_id);
+        self.output_events.push(OutputEvent::SurfaceEnteredOutput {
+            surface: data.id,
+            output: output_id,
+        });
     }
 
     fn surface_leave(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &WlSurface,
-        _output: &WlOutput,
+        surface: &WlSurface,
+        output: &WlOutput,
     ) {
+        let Some(output_id) = self.outputs.get(output).map(|info| info.id) else {
+            return;
+        };
+        let Some(data) = self.surfaces.get_mut(surface) else {
+            return;
+        };
+        if data.current_output == Some(output_id) {
+            data.current_output = None;
+        }
+        self.output_events.push(OutputEvent::SurfaceLeftOutput {
+            surface: data.id,
+            output: output_id,
+        });
     }
 }
 

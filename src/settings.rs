@@ -157,6 +157,20 @@ pub enum OutputEvent {
     Added(OutputInfo),
     Removed(OutputId),
     InfoChanged(OutputInfo),
+    /// A layer surface has been mapped on (or moved to) the given output. For
+    /// surfaces created with `output: None`, this reveals which output the
+    /// compositor picked. May fire more than once if the surface intersects
+    /// multiple outputs.
+    SurfaceEnteredOutput {
+        surface: SurfaceId,
+        output: OutputId,
+    },
+    /// A layer surface left the given output (typically before destruction or
+    /// when the compositor reassigns it).
+    SurfaceLeftOutput {
+        surface: SurfaceId,
+        output: OutputId,
+    },
 }
 
 /// Configuration for a layer shell surface.
