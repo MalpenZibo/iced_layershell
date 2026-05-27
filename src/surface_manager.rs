@@ -133,7 +133,8 @@ pub(crate) fn flush_pending_creations(
     qh: &QueueHandle<WaylandState>,
 ) {
     while let Some((id, settings)) = pending.pop() {
-        let (layer, scale) = create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
+        let (layer, scale) =
+            create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
         wl.register_surface(id, layer, scale);
     }
 }
@@ -195,8 +196,7 @@ pub(crate) fn create_layer_surface(
     let scale = wl_output
         .as_ref()
         .and_then(|wo| wl_state.outputs.get(wo))
-        .map(|info| info.scale_factor)
-        .unwrap_or(1);
+        .map_or(1, |info| info.scale_factor);
     if scale > 1 {
         layer_surface.wl_surface().set_buffer_scale(scale);
     }

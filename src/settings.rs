@@ -161,10 +161,16 @@ pub enum OutputEvent {
     /// surfaces created with `output: None`, this reveals which output the
     /// compositor picked. May fire more than once if the surface intersects
     /// multiple outputs.
-    SurfaceEnteredOutput { surface: SurfaceId, output: OutputId },
+    SurfaceEnteredOutput {
+        surface: SurfaceId,
+        output: OutputId,
+    },
     /// A layer surface left the given output (typically before destruction or
     /// when the compositor reassigns it).
-    SurfaceLeftOutput { surface: SurfaceId, output: OutputId },
+    SurfaceLeftOutput {
+        surface: SurfaceId,
+        output: OutputId,
+    },
 }
 
 /// Configuration for a layer shell surface.
