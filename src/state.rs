@@ -147,6 +147,35 @@ impl WaylandState {
         scale_factor: i32,
     ) {
         let wl_surface = layer_surface.wl_surface().clone();
+
+        // If a surface with the same id is already registered (e.g. when
+        // LayerShellCommand::NewSurface is issued for an id that already has
+        // an active surface), drop the old entry from tracking. We do not push
+        // it to `closed_surfaces` because the new surface must not be
+        // destroyed by the cleanup loop. `needs_rerender` is carried over so a
+        // pending rerender request is not lost, and any already-queued `closed`
+        // event for this id is discarded (it referred to the old surface).
+        //
+        // `frame_pending` is NOT carried over: it refers to a frame callback
+        // attached to the old wl_surface, which will never fire on the new one.
+        // Carrying it would cause the redraw loop to skip drawing on the new
+        // surface indefinitely.
+        //
+        // Note: dropping the old `LayerSurface` triggers SCTK's
+        // `LayerSurfaceInner::drop`, which sends the protocol-level
+        // `zwlr_layer_surface_v1.destroy()` to the compositor. So we don't
+        // need to (and can't) call it ourselves from this API.
+        let needs_rerender = if let Some(old_wl_surface) = self.surface_id_map.remove(&id) {
+            let carried = self
+                .surfaces
+                .remove(&old_wl_surface)
+                .is_some_and(|old| old.needs_rerender);
+            self.closed_surfaces.retain(|sid| *sid != id);
+            carried
+        } else {
+            false
+        };
+
         self.surfaces.insert(
             wl_surface.clone(),
             SurfaceData {
@@ -156,7 +185,7 @@ impl WaylandState {
                 scale_factor,
                 configured: false,
                 frame_pending: false,
-                needs_rerender: false,
+                needs_rerender,
                 current_output: None,
             },
         );
