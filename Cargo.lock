@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "iced_layershell"
-version = "0.1.4"
+version = "0.2.1"
 dependencies = [
  "calloop",
  "calloop-wayland-source",
@@ -1824,7 +1824,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
 dependencies = [
- "bitflags 2.11.0",
+ "bitflags 2.12.1",
  "crc32fast",
  "fdeflate",
  "flate2",
@@ -2338,7 +2338,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
 dependencies = [
  "bytemuck",
+ "fastrand",
  "js-sys",
+ "memmap2",
  "ndk",
  "objc2",
  "objc2-core-foundation",
@@ -2347,8 +2349,12 @@ dependencies = [
  "objc2-quartz-core",
  "raw-window-handle",
  "redox_syscall",
+ "rustix",
  "tracing",
  "wasm-bindgen",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-sys",
  "web-sys",
  "windows-sys",
 ]
@@ -2938,6 +2944,7 @@ checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
 dependencies = [
  "dlib",
  "log",
+ "once_cell",
  "pkg-config",
 ]
 

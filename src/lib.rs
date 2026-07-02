@@ -1,6 +1,8 @@
 #![warn(clippy::pedantic)]
 
 mod application;
+pub(crate) mod blur;
+pub(crate) mod blur_region;
 mod conversion;
 mod error;
 pub(crate) mod event_loop;
@@ -18,6 +20,7 @@ mod task_impl;
 
 // === Layer shell API ===
 pub use application::application;
+pub use blur::{BlurContainer, blur, blur_container};
 pub use error::Error;
 pub use output_subscription::output_events;
 pub use settings::{
@@ -117,6 +120,7 @@ pub mod overlay {
 }
 
 pub mod widget {
+    pub use crate::blur::{BlurContainer, blur, blur_container};
     pub use iced_widget::*;
 }
 

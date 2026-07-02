@@ -9,6 +9,16 @@ pub struct InputRegionRect {
     pub height: i32,
 }
 
+/// A rectangle within a surface's coordinate space, used to mark areas where the
+/// compositor should apply blur via the `ext-background-effect-v1` protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlurRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 /// A command to modify the layer shell state.
 #[derive(Debug, Clone)]
 pub enum LayerShellCommand {

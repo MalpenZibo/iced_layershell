@@ -15,7 +15,7 @@ use wayland_client::QueueHandle;
 
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
-use crate::task_impl::LayerShellCommand;
+use crate::task_impl::{BlurRect, LayerShellCommand};
 use crate::window_handle::WaylandWindow;
 
 /// Per-surface iced rendering data.
@@ -31,7 +31,6 @@ pub(crate) fn apply_layer_shell_command(
     cmd: LayerShellCommand,
     state: &mut WaylandState,
     pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
-    _qh: &QueueHandle<WaylandState>,
 ) {
     match cmd {
         LayerShellCommand::NewSurface(id, settings) => {
@@ -124,6 +123,62 @@ pub(crate) fn apply_layer_shell_command(
             }
         }
     }
+}
+
+/// Push a blur region to the compositor (`ext-background-effect-v1`), called
+/// from the draw loop with regions derived from `blur_container` widgets.
+pub(crate) fn apply_set_blur_region(
+    state: &mut WaylandState,
+    id: SurfaceId,
+    rects: Option<Vec<BlurRect>>,
+    qh: &QueueHandle<WaylandState>,
+) {
+    // No-op if the compositor doesn't advertise the protocol or blur capability.
+    if state.bg_effect_manager.is_none() || !state.bg_effect_supports_blur {
+        return;
+    }
+    let Some(wl) = state.surface_id_map.get(&id).cloned() else {
+        return;
+    };
+
+    // Lazily create the per-surface effect object on first use.
+    if state
+        .surfaces
+        .get(&wl)
+        .is_some_and(|d| d.bg_effect_surface.is_none())
+    {
+        let manager = state
+            .bg_effect_manager
+            .as_ref()
+            .expect("checked above")
+            .clone();
+        let effect = manager.get_background_effect(&wl, qh, ());
+        if let Some(data) = state.surfaces.get_mut(&wl) {
+            data.bg_effect_surface = Some(effect);
+        }
+    }
+
+    let Some(data) = state.surfaces.get(&wl) else {
+        return;
+    };
+    let Some(effect) = data.bg_effect_surface.as_ref() else {
+        return;
+    };
+    let wl_surf = data.layer_surface.wl_surface();
+    match rects {
+        None => {
+            effect.set_blur_region(None);
+        }
+        Some(rects) => {
+            if let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) {
+                for r in &rects {
+                    region.add(r.x, r.y, r.width, r.height);
+                }
+                effect.set_blur_region(Some(region.wl_region()));
+            }
+        }
+    }
+    wl_surf.commit();
 }
 
 /// Flush pending surface creations.

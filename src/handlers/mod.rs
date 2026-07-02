@@ -10,6 +10,7 @@
 //! - `touch`: `wl_touch` input
 //! - `data_device`: clipboard and drag-and-drop
 
+pub mod background_effect;
 pub mod compositor;
 pub mod data_device;
 pub mod keyboard;
