@@ -2,10 +2,8 @@
 //! widget tree: [`blur_container`] is a [`container`] that also publishes a blur
 //! region derived from its own bounds and the corner radius of its style.
 //!
-//! Regions are recorded during `draw` rather than by a second [`Operation`] pass
-//! over the tree: `draw` already resolves the style (and with it the radius) and
-//! already knows what a parent clipped away, so the backend gets the regions for
-//! free instead of walking every widget again on each frame.
+//! Regions are recorded during `draw`, which already resolves the style and
+//! already knows what a parent clipped away.
 
 use std::cell::{Cell, RefCell};
 
@@ -22,24 +20,19 @@ use crate::blur_region::rounded_rect_to_blur_rects;
 use crate::task_impl::BlurRect;
 
 thread_local! {
-    /// Regions recorded by [`BlurContainer::draw`] since the last [`begin_frame`].
     static REGIONS: RefCell<Vec<(Rectangle, Radius)>> = const { RefCell::new(Vec::new()) };
     static COLLECTING: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Start recording regions for one surface's draw. `enabled` is false when the
-/// compositor can't blur, which makes recording a single [`Cell`] read.
+/// Start recording regions for one surface's draw.
 pub(crate) fn begin_frame(enabled: bool) {
     COLLECTING.set(enabled);
     REGIONS.with_borrow_mut(Vec::clear);
 }
 
-/// Take what the last draw recorded, converting iced's logical coordinates into
-/// the surface-local pixels `wl_region` expects.
-///
-/// The viewport scale is `monitor_scale * app_scale` while the surface is sized
-/// in `monitor_scale`-relative pixels, so only `app_scale` has to be undone.
-/// Scaling before tessellation keeps the pixel rounding in the target space.
+/// Take what the last draw recorded, in the surface-local pixels `wl_region`
+/// expects: the viewport scale is `monitor_scale * app_scale` while the surface
+/// is sized in `monitor_scale`-relative pixels, so only `app_scale` is undone.
 pub(crate) fn take_rects(app_scale: f32) -> Vec<BlurRect> {
     REGIONS.with_borrow_mut(|regions| {
         regions
@@ -86,9 +79,7 @@ where
     Renderer: iced_core::Renderer,
 {
     let content = content.into();
-    // Adopt the content's fluidity, exactly like `Container::new`. Hardcoding
-    // `Shrink` collapses a `Fill` child to zero size, which silently makes the
-    // whole widget disappear.
+    // Like `Container::new`: hardcoding `Shrink` collapses a `Fill` child to zero.
     let size = content.as_widget().size_hint();
 
     BlurContainer {
@@ -318,8 +309,7 @@ where
         let style = (self.style)(theme);
 
         if let Some(clipped_viewport) = bounds.intersection(viewport) {
-            // Blur only what is actually on screen: a widget scrolled out of a
-            // clipping parent must not leave blur behind where it isn't drawn.
+            // Blur only what is on screen, not what a clipping parent hid.
             record(clipped_viewport, style.border.radius);
 
             container::draw_background(renderer, &style, bounds);
@@ -417,8 +407,7 @@ mod tests {
 
     #[test]
     fn fractional_scale_keeps_rounded_slabs_gap_free() {
-        // A downscaled corner produces sub-pixel slabs; they must still tile the
-        // band without gaps once rounded to whole pixels.
+        // A downscaled corner produces sub-pixel slabs that must still tile.
         begin_frame(true);
         record(rect(0.0, 0.0, 100.0, 40.0), Radius::from(8.0));
         let rects = take_rects(0.5);

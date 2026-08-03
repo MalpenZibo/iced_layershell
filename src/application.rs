@@ -190,8 +190,7 @@ where
         )
         .ok();
 
-    // ext-background-effect-v1: bind if the compositor advertises it.
-    // None where the protocol is unsupported — the feature simply no-ops.
+    // `None` where the protocol is unsupported — the feature simply no-ops.
     let bg_effect_manager: Option<
         wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
     > = globals.bind(&qh, 1..=1, ()).ok();
@@ -390,9 +389,7 @@ where
             if let Some(wl_surface) = wl_state.surface_id_map.remove(&closed_id)
                 && let Some(data) = wl_state.surfaces.remove(&wl_surface)
             {
-                // Release the background-effect proxy explicitly — wayland-client
-                // doesn't auto-destroy on Drop, so without this the server leaks
-                // the resource until disconnection.
+                // wayland-client doesn't destroy on Drop, so the server would leak it.
                 if let Some(effect) = data.bg_effect_surface {
                     effect.destroy();
                 }
@@ -664,8 +661,8 @@ where
                     Some(wl) => wl.clone(),
                     None => continue,
                 };
-                // Checked without holding a borrow: pushing the blur region below
-                // needs `&mut wl_state` before we take `data` for presenting.
+                // Checked without holding a borrow: the blur region below needs
+                // `&mut wl_state` before we take `data` for presenting.
                 if !wl_state
                     .surfaces
                     .get(&wl_surface)
@@ -701,8 +698,7 @@ where
                     }
                 );
 
-                // Draw. `blur_container` widgets record their regions as they
-                // draw, so no second pass over the tree is needed.
+                // Draw. `blur_container` widgets record their regions as they draw.
                 let blur_enabled = wl_state.bg_effect_supports_blur;
                 blur::begin_frame(blur_enabled);
                 let style = iced_core::renderer::Style {
@@ -710,8 +706,8 @@ where
                 };
                 ui.draw(&mut renderer, &theme, &style, cursor);
 
-                // Before the present below, so the buffer commit applies the
-                // region and the content together.
+                // Before present, so the buffer commit applies region and content
+                // together.
                 if blur_enabled {
                     let region = blur::take_rects(app_scale);
                     apply_blur_region(&mut wl_state, *surface_id, region, &qh);

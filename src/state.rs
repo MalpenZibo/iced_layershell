@@ -42,12 +42,10 @@ pub(crate) struct SurfaceData {
     /// events. `None` until the compositor maps the surface (or after a
     /// `wl_surface.leave` if not re-entered).
     pub current_output: Option<OutputId>,
-    /// `ext_background_effect_surface_v1` proxy, created lazily on first use
-    /// if the manager global is available.
+    /// `ext_background_effect_surface_v1` proxy, created on first use.
     pub bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
     /// Last blur region pushed, so we only re-send when it changes. `None` until
-    /// the first push, which has to happen even when the region is empty: a
-    /// compositor may blur the whole surface by policy until we say otherwise.
+    /// the first push, which has to happen even when the region is empty.
     pub blur_region: Option<Vec<crate::task_impl::BlurRect>>,
 }
 

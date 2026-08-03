@@ -9,8 +9,7 @@ pub struct InputRegionRect {
     pub height: i32,
 }
 
-/// A rectangle within a surface's coordinate space, used to mark areas where the
-/// compositor should apply blur via the `ext-background-effect-v1` protocol.
+/// A surface-local rectangle the compositor should blur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BlurRect {
     pub x: i32,

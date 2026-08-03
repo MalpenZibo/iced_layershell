@@ -1,7 +1,4 @@
 //! `ext-background-effect-v1` handlers.
-//!
-//! Implements `Dispatch` for the manager (to read the capabilities bitfield)
-//! and a no-op delegate for the per-surface effect object (no events).
 
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::ext::background_effect::v1::client::{
