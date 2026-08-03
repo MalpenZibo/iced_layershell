@@ -125,8 +125,7 @@ pub(crate) fn apply_layer_shell_command(
     }
 }
 
-/// Push a blur region to the compositor (`ext-background-effect-v1`), called
-/// from the draw loop with regions derived from `blur_container` widgets.
+/// Push a blur region to the compositor (`ext-background-effect-v1`).
 ///
 /// `set_blur_region` is double-buffered state applied by the next
 /// `wl_surface.commit`, so this deliberately does not commit: the buffer commit
@@ -144,15 +143,12 @@ pub(crate) fn apply_blur_region(
         return;
     };
     // `None` means nothing has been pushed yet, so the first frame always sends
-    // a region even when it is empty. Otherwise a surface with no blur widget
-    // would silently keep whatever blur the compositor applies by default.
+    // a region even when empty — see below.
     if data.blur_region.as_deref() == Some(rects.as_slice()) {
         return;
     }
 
-    // Create the per-surface effect object on the first push. Asking twice is a
-    // protocol error, hence the `is_none` guard rather than an unconditional
-    // create.
+    // Asking twice for the same surface is a protocol error.
     if data.bg_effect_surface.is_none() {
         let Some(manager) = state.bg_effect_manager.clone() else {
             return;
@@ -171,10 +167,8 @@ pub(crate) fn apply_blur_region(
         return;
     };
 
-    // Always send a region, empty when there is nothing to blur. A NULL region
-    // only withdraws our opinion, which lets a compositor-side rule blur the
-    // whole surface; an empty region says "blur exactly nothing".
-    // Copy semantics: the region may be dropped as soon as the request is sent.
+    // Never NULL: that only withdraws our opinion and lets a compositor-side rule
+    // blur the whole surface, where an empty region says "blur exactly nothing".
     let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) else {
         return;
     };

@@ -1,7 +1,4 @@
 //! `ext-background-effect-v1` handlers.
-//!
-//! Implements `Dispatch` for the manager (to read the capabilities bitfield)
-//! and a no-op delegate for the per-surface effect object (no events).
 
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::ext::background_effect::v1::client::{
@@ -25,15 +22,17 @@ impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
                 WEnum::Value(c) => c.contains(Capability::Blur),
                 WEnum::Unknown(_) => false,
             };
-            // Losing the capability drops the compositor's regions, so forget
-            // ours too — otherwise an unchanged region would never be re-sent
-            // if the capability came back.
-            if !blur {
-                for data in state.surfaces.values_mut() {
-                    data.blur_region = None;
-                }
+            if blur == state.bg_effect_supports_blur {
+                return;
             }
             state.bg_effect_supports_blur = blur;
+
+            // The compositor drops its regions when the capability goes away, so
+            // forget ours and redraw to push them again if it comes back.
+            for data in state.surfaces.values_mut() {
+                data.blur_region = None;
+                state.surfaces_need_redraw.insert(data.id);
+            }
         }
     }
 }

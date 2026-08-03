@@ -6,12 +6,11 @@ use iced_core::{Rectangle, border::Radius};
 use crate::task_impl::BlurRect;
 
 /// Approximate a per-corner rounded rectangle as a union of axis-aligned
-/// [`BlurRect`]s that **inscribe** the shape — tiles follow the curve inward
-/// instead of covering the bounding box, to within the half pixel of edge
-/// rounding. A zero radius or degenerate rectangle yields the bounding box.
+/// [`BlurRect`]s that **inscribe** the shape. A zero radius or degenerate
+/// rectangle yields the bounding box.
 ///
-/// `bounds` and `radius` must already be in surface-local pixels, so that the
-/// slab count and the edge rounding match the pixels the compositor blurs.
+/// `bounds` and `radius` must already be in surface-local pixels, so slab count
+/// and edge rounding match the pixels the compositor blurs.
 #[must_use]
 #[allow(
     clippy::cast_possible_truncation,
@@ -99,12 +98,9 @@ fn corner_inset(y: f32, top_r: f32, bottom_start: f32, bottom_r: f32) -> f32 {
     }
 }
 
-/// Round-to-nearest on all four edges so adjacent slabs tile without gaps or
-/// overlaps (inward rounding would drop sub-pixel slabs). Costs up to half a
-/// pixel of outward bleed, which the compositor clips to the surface anyway.
-///
-/// `None` when rounding collapses the rectangle to nothing, which happens for
-/// sub-pixel slabs at small scale factors and would only add empty requests.
+/// Round-to-nearest on all four edges so adjacent slabs tile without gaps
+/// (inward rounding would drop sub-pixel slabs). `None` when the rounding
+/// collapses the rectangle to nothing.
 #[allow(clippy::cast_possible_truncation)] // rounded pixel coordinates
 fn to_blur_rect(b: Rectangle) -> Option<BlurRect> {
     let x0 = b.x.round() as i32;
@@ -191,8 +187,7 @@ mod tests {
 
     #[test]
     fn rounded_respects_a_non_zero_origin() {
-        // Menu surfaces place their blur container at an offset, so the origin
-        // has to be carried through every slab, not just the bounding box.
+        // The origin has to be carried through every slab, not just the box.
         let bounds = rect(37.0, 12.0, 100.0, 40.0);
         let out = rounded_rect_to_blur_rects(bounds, Radius::from(12.0));
         assert!(out.len() > 1);
@@ -213,8 +208,7 @@ mod tests {
 
     #[test]
     fn radius_larger_than_half_the_shortest_side_is_clamped() {
-        // A pill: the radius exceeds h/2, so the corners must clamp instead of
-        // letting the top and bottom bands overlap.
+        // A pill: without clamping the top and bottom bands would overlap.
         let bounds = rect(0.0, 0.0, 100.0, 40.0);
         let out = rounded_rect_to_blur_rects(bounds, Radius::from(500.0));
         assert!(!out.is_empty());
@@ -242,8 +236,7 @@ mod tests {
             out.iter()
                 .any(|r| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
         };
-        // The vertical centre line crosses every band; a dropped slab shows up
-        // here as a hole.
+        // The centre line crosses every band, so a dropped slab shows as a hole.
         for y in 0..40 {
             assert!(covers(50, y), "horizontal band missing at y={y}");
         }

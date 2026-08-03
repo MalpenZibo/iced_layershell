@@ -61,9 +61,8 @@ fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
         },
     };
 
-    // `blur_container` is a `container` that also asks the compositor to blur
-    // the wallpaper behind it, following the corner radius of this style. On a
-    // compositor without `ext-background-effect-v1` it is just a `container`.
+    // A `container` that also blurs the wallpaper behind it, following the corner
+    // radius of this style.
     let island = blur_container(
         row![
             button(text(" - ").size(14))
