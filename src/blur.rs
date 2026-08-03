@@ -85,11 +85,17 @@ pub fn blur_container<'a, Message, Theme, Renderer>(
 where
     Renderer: iced_core::Renderer,
 {
+    let content = content.into();
+    // Adopt the content's fluidity, exactly like `Container::new`. Hardcoding
+    // `Shrink` collapses a `Fill` child to zero size, which silently makes the
+    // whole widget disappear.
+    let size = content.as_widget().size_hint();
+
     BlurContainer {
-        content: content.into(),
+        content,
         style: Box::new(|_| container::Style::default()),
-        width: Length::Shrink,
-        height: Length::Shrink,
+        width: size.width.fluid(),
+        height: size.height.fluid(),
         max_width: f32::INFINITY,
         max_height: f32::INFINITY,
         padding: Padding::ZERO,
