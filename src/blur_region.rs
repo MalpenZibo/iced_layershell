@@ -6,8 +6,12 @@ use iced_core::{Rectangle, border::Radius};
 use crate::task_impl::BlurRect;
 
 /// Approximate a per-corner rounded rectangle as a union of axis-aligned
-/// [`BlurRect`]s that **inscribe** the shape — tiles never extend past the
-/// visible curve. A zero radius or degenerate rectangle yields the bounding box.
+/// [`BlurRect`]s that **inscribe** the shape — tiles follow the curve inward
+/// instead of covering the bounding box, to within the half pixel of edge
+/// rounding. A zero radius or degenerate rectangle yields the bounding box.
+///
+/// `bounds` and `radius` must already be in surface-local pixels, so that the
+/// slab count and the edge rounding match the pixels the compositor blurs.
 #[must_use]
 #[allow(
     clippy::cast_possible_truncation,
@@ -30,7 +34,7 @@ pub(crate) fn rounded_rect_to_blur_rects(bounds: Rectangle, radius: Radius) -> V
     let bl = radius.bottom_left.clamp(0.0, max_r);
 
     if tl.max(tr).max(br).max(bl) <= 0.5 {
-        return vec![to_blur_rect(bounds)];
+        return Vec::from_iter(to_blur_rect(bounds));
     }
 
     let left_inset = |y: f32| corner_inset(y, tl, h - bl, bl);
@@ -42,7 +46,7 @@ pub(crate) fn rounded_rect_to_blur_rects(bounds: Rectangle, radius: Radius) -> V
     let mut out = Vec::new();
 
     if h - bottom_band > top_band {
-        out.push(to_blur_rect(Rectangle {
+        out.extend(to_blur_rect(Rectangle {
             x: bounds.x,
             y: bounds.y + top_band,
             width: w,
@@ -67,7 +71,7 @@ pub(crate) fn rounded_rect_to_blur_rects(bounds: Rectangle, radius: Radius) -> V
             if slab_w <= 0.0 {
                 continue;
             }
-            out.push(to_blur_rect(Rectangle {
+            out.extend(to_blur_rect(Rectangle {
                 x: bounds.x + li,
                 y: bounds.y + y0,
                 width: slab_w,
@@ -96,19 +100,23 @@ fn corner_inset(y: f32, top_r: f32, bottom_start: f32, bottom_r: f32) -> f32 {
 }
 
 /// Round-to-nearest on all four edges so adjacent slabs tile without gaps or
-/// overlaps (inward rounding would drop sub-pixel slabs).
+/// overlaps (inward rounding would drop sub-pixel slabs). Costs up to half a
+/// pixel of outward bleed, which the compositor clips to the surface anyway.
+///
+/// `None` when rounding collapses the rectangle to nothing, which happens for
+/// sub-pixel slabs at small scale factors and would only add empty requests.
 #[allow(clippy::cast_possible_truncation)] // rounded pixel coordinates
-fn to_blur_rect(b: Rectangle) -> BlurRect {
+fn to_blur_rect(b: Rectangle) -> Option<BlurRect> {
     let x0 = b.x.round() as i32;
     let y0 = b.y.round() as i32;
     let x1 = (b.x + b.width).round() as i32;
     let y1 = (b.y + b.height).round() as i32;
-    BlurRect {
+    (x1 > x0 && y1 > y0).then_some(BlurRect {
         x: x0,
         y: y0,
-        width: (x1 - x0).max(0),
-        height: (y1 - y0).max(0),
-    }
+        width: x1 - x0,
+        height: y1 - y0,
+    })
 }
 
 #[cfg(test)]
@@ -179,6 +187,66 @@ mod tests {
         assert!(!covers(99, 39), "bottom-right corner should be inscribed");
         // ...but the center is always covered.
         assert!(covers(50, 20), "center should be blurred");
+    }
+
+    #[test]
+    fn rounded_respects_a_non_zero_origin() {
+        // Menu surfaces place their blur container at an offset, so the origin
+        // has to be carried through every slab, not just the bounding box.
+        let bounds = rect(37.0, 12.0, 100.0, 40.0);
+        let out = rounded_rect_to_blur_rects(bounds, Radius::from(12.0));
+        assert!(out.len() > 1);
+        for r in &out {
+            assert!(r.x >= 37 && r.y >= 12, "rect leaks past top/left: {r:?}");
+            assert!(
+                (r.x + r.width) <= 137 && (r.y + r.height) <= 52,
+                "rect leaks past bottom/right: {r:?}"
+            );
+        }
+        let covers = |px: i32, py: i32| {
+            out.iter()
+                .any(|r| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
+        };
+        assert!(covers(87, 32), "center should be blurred");
+        assert!(!covers(37, 12), "top-left corner should be inscribed");
+    }
+
+    #[test]
+    fn radius_larger_than_half_the_shortest_side_is_clamped() {
+        // A pill: the radius exceeds h/2, so the corners must clamp instead of
+        // letting the top and bottom bands overlap.
+        let bounds = rect(0.0, 0.0, 100.0, 40.0);
+        let out = rounded_rect_to_blur_rects(bounds, Radius::from(500.0));
+        assert!(!out.is_empty());
+        for r in &out {
+            assert!(r.x >= 0 && r.y >= 0);
+            assert!((r.x + r.width) <= 100 && (r.y + r.height) <= 40);
+        }
+        let covers = |px: i32, py: i32| {
+            out.iter()
+                .any(|r| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
+        };
+        assert!(covers(50, 20), "center should be blurred");
+        assert!(!covers(0, 0), "clamped corner should still be inscribed");
+        // Widest point of the pill: the full width is reached at mid-height.
+        assert!(
+            covers(0, 20) && covers(99, 20),
+            "waist should be full width"
+        );
+    }
+
+    #[test]
+    fn slabs_tile_without_gaps() {
+        let out = rounded_rect_to_blur_rects(rect(0.0, 0.0, 100.0, 40.0), Radius::from(12.0));
+        let covers = |px: i32, py: i32| {
+            out.iter()
+                .any(|r| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
+        };
+        // The vertical centre line crosses every band; a dropped slab shows up
+        // here as a hole.
+        for y in 0..40 {
+            assert!(covers(50, y), "horizontal band missing at y={y}");
+        }
     }
 
     #[test]

@@ -25,6 +25,14 @@ impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
                 WEnum::Value(c) => c.contains(Capability::Blur),
                 WEnum::Unknown(_) => false,
             };
+            // Losing the capability drops the compositor's regions, so forget
+            // ours too — otherwise an unchanged region would never be re-sent
+            // if the capability came back.
+            if !blur {
+                for data in state.surfaces.values_mut() {
+                    data.blur_region = None;
+                }
+            }
             state.bg_effect_supports_blur = blur;
         }
     }

@@ -1,13 +1,17 @@
 //! Compositor-side background blur (`ext-background-effect-v1`), driven from the
 //! widget tree: [`blur_container`] is a [`container`] that also publishes a blur
-//! region derived from its own bounds and the corner radius of its style. The
-//! backend gathers all blur widgets each frame via [`CollectBlurRegions`].
+//! region derived from its own bounds and the corner radius of its style.
+//!
+//! Regions are recorded during `draw` rather than by a second [`Operation`] pass
+//! over the tree: `draw` already resolves the style (and with it the radius) and
+//! already knows what a parent clipped away, so the backend gets the regions for
+//! free instead of walking every widget again on each frame.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use iced_core::border::{Border, Radius};
-use iced_core::widget::tree::{self, Tree};
-use iced_core::widget::{Id, Operation, Widget};
+use iced_core::widget::Tree;
+use iced_core::widget::{Operation, Widget};
 use iced_core::{
     Clipboard, Element, Event, Layout, Length, Padding, Rectangle, Shell, Size, Vector, alignment,
     layout, mouse, overlay, renderer,
@@ -17,11 +21,40 @@ use iced_widget::container;
 use crate::blur_region::rounded_rect_to_blur_rects;
 use crate::task_impl::BlurRect;
 
-/// Marker read by [`CollectBlurRegions`]. A [`Cell`] because the radius is
-/// resolved from the theme in `draw` (`&Tree` only) and read back in `operate`.
-#[derive(Debug, Default)]
-struct BlurTag {
-    radius: Cell<Radius>,
+thread_local! {
+    /// Regions recorded by [`BlurContainer::draw`] since the last [`begin_frame`].
+    static REGIONS: RefCell<Vec<(Rectangle, Radius)>> = const { RefCell::new(Vec::new()) };
+    static COLLECTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Start recording regions for one surface's draw. `enabled` is false when the
+/// compositor can't blur, which makes recording a single [`Cell`] read.
+pub(crate) fn begin_frame(enabled: bool) {
+    COLLECTING.set(enabled);
+    REGIONS.with_borrow_mut(Vec::clear);
+}
+
+/// Take what the last draw recorded, converting iced's logical coordinates into
+/// the surface-local pixels `wl_region` expects.
+///
+/// The viewport scale is `monitor_scale * app_scale` while the surface is sized
+/// in `monitor_scale`-relative pixels, so only `app_scale` has to be undone.
+/// Scaling before tessellation keeps the pixel rounding in the target space.
+pub(crate) fn take_rects(app_scale: f32) -> Vec<BlurRect> {
+    REGIONS.with_borrow_mut(|regions| {
+        regions
+            .drain(..)
+            .flat_map(|(bounds, radius)| {
+                rounded_rect_to_blur_rects(bounds * app_scale, radius * app_scale)
+            })
+            .collect()
+    })
+}
+
+fn record(bounds: Rectangle, radius: Radius) {
+    if COLLECTING.get() {
+        REGIONS.with_borrow_mut(|regions| regions.push((bounds, radius)));
+    }
 }
 
 /// A [`container`] that also blurs the compositor background behind itself,
@@ -169,14 +202,6 @@ impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
 where
     Renderer: iced_core::Renderer,
 {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<BlurTag>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(BlurTag::default())
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content)]
     }
@@ -222,7 +247,6 @@ where
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        operation.custom(None, layout.bounds(), tree.state.downcast_mut::<BlurTag>());
         self.content.as_widget_mut().operate(
             &mut tree.children[0],
             layout.children().next().unwrap(),
@@ -284,13 +308,11 @@ where
         let bounds = layout.bounds();
         let style = (self.style)(theme);
 
-        // Hand the resolved radius to `operate` for the blur region.
-        tree.state
-            .downcast_ref::<BlurTag>()
-            .radius
-            .set(style.border.radius);
-
         if let Some(clipped_viewport) = bounds.intersection(viewport) {
+            // Blur only what is actually on screen: a widget scrolled out of a
+            // clipping parent must not leave blur behind where it isn't drawn.
+            record(clipped_viewport, style.border.radius);
+
             container::draw_background(renderer, &style, bounds);
 
             self.content.as_widget().draw(
@@ -341,34 +363,83 @@ where
     }
 }
 
-/// Gathers the bounds and corner radius of every blur widget in a surface tree.
-pub(crate) struct CollectBlurRegions {
-    regions: Vec<(Rectangle, Radius)>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl CollectBlurRegions {
-    pub(crate) fn new() -> Self {
-        Self {
-            regions: Vec::new(),
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
+        Rectangle {
+            x,
+            y,
+            width,
+            height,
         }
     }
 
-    pub(crate) fn into_blur_rects(self) -> Vec<BlurRect> {
-        self.regions
-            .into_iter()
-            .flat_map(|(bounds, radius)| rounded_rect_to_blur_rects(bounds, radius))
-            .collect()
+    #[test]
+    fn take_rects_converts_logical_to_surface_local() {
+        begin_frame(true);
+        record(rect(10.0, 4.0, 100.0, 20.0), Radius::from(0.0));
+        assert_eq!(
+            take_rects(1.5),
+            vec![BlurRect {
+                x: 15,
+                y: 6,
+                width: 150,
+                height: 30
+            }]
+        );
     }
-}
 
-impl<T> Operation<T> for CollectBlurRegions {
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
-        operate(self);
+    #[test]
+    fn take_rects_is_identity_at_unit_scale() {
+        begin_frame(true);
+        record(rect(10.0, 4.0, 100.0, 20.0), Radius::from(0.0));
+        assert_eq!(
+            take_rects(1.0),
+            vec![BlurRect {
+                x: 10,
+                y: 4,
+                width: 100,
+                height: 20
+            }]
+        );
     }
 
-    fn custom(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
-        if let Some(tag) = state.downcast_ref::<BlurTag>() {
-            self.regions.push((bounds, tag.radius.get()));
+    #[test]
+    fn fractional_scale_keeps_rounded_slabs_gap_free() {
+        // A downscaled corner produces sub-pixel slabs; they must still tile the
+        // band without gaps once rounded to whole pixels.
+        begin_frame(true);
+        record(rect(0.0, 0.0, 100.0, 40.0), Radius::from(8.0));
+        let rects = take_rects(0.5);
+        assert!(!rects.is_empty());
+        for r in &rects {
+            assert!(r.width > 0 && r.height > 0, "degenerate rect: {r:?}");
+            assert!(r.x >= 0 && r.y >= 0 && r.x + r.width <= 50 && r.y + r.height <= 20);
         }
+        let covers = |px: i32, py: i32| {
+            rects
+                .iter()
+                .any(|r| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
+        };
+        for y in 0..20 {
+            assert!(covers(25, y), "column gap at y={y}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_recorded_while_disabled() {
+        begin_frame(false);
+        record(rect(0.0, 0.0, 10.0, 10.0), Radius::from(0.0));
+        assert!(take_rects(1.0).is_empty());
+    }
+
+    #[test]
+    fn begin_frame_discards_the_previous_frame() {
+        begin_frame(true);
+        record(rect(0.0, 0.0, 10.0, 10.0), Radius::from(0.0));
+        begin_frame(true);
+        assert!(take_rects(1.0).is_empty());
     }
 }

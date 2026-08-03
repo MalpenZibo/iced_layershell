@@ -127,58 +127,67 @@ pub(crate) fn apply_layer_shell_command(
 
 /// Push a blur region to the compositor (`ext-background-effect-v1`), called
 /// from the draw loop with regions derived from `blur_container` widgets.
-pub(crate) fn apply_set_blur_region(
+///
+/// `set_blur_region` is double-buffered state applied by the next
+/// `wl_surface.commit`, so this deliberately does not commit: the buffer commit
+/// in `present` picks it up and region and content change in the same frame.
+pub(crate) fn apply_blur_region(
     state: &mut WaylandState,
     id: SurfaceId,
-    rects: Option<Vec<BlurRect>>,
+    rects: Vec<BlurRect>,
     qh: &QueueHandle<WaylandState>,
 ) {
-    // No-op if the compositor doesn't advertise the protocol or blur capability.
-    if state.bg_effect_manager.is_none() || !state.bg_effect_supports_blur {
-        return;
-    }
     let Some(wl) = state.surface_id_map.get(&id).cloned() else {
         return;
     };
+    let Some(data) = state.surfaces.get(&wl) else {
+        return;
+    };
+    // `None` means nothing has been pushed yet, so the first frame always sends
+    // a region even when it is empty. Otherwise a surface with no blur widget
+    // would silently keep whatever blur the compositor applies by default.
+    if data.blur_region.as_deref() == Some(rects.as_slice()) {
+        return;
+    }
 
-    // Lazily create the per-surface effect object on first use.
-    if state
-        .surfaces
-        .get(&wl)
-        .is_some_and(|d| d.bg_effect_surface.is_none())
-    {
-        let manager = state
-            .bg_effect_manager
-            .as_ref()
-            .expect("checked above")
-            .clone();
+    // Create the per-surface effect object on the first push. Asking twice is a
+    // protocol error, hence the `is_none` guard rather than an unconditional
+    // create.
+    if data.bg_effect_surface.is_none() {
+        let Some(manager) = state.bg_effect_manager.clone() else {
+            return;
+        };
         let effect = manager.get_background_effect(&wl, qh, ());
         if let Some(data) = state.surfaces.get_mut(&wl) {
             data.bg_effect_surface = Some(effect);
         }
     }
 
-    let Some(data) = state.surfaces.get(&wl) else {
+    let Some(effect) = state
+        .surfaces
+        .get(&wl)
+        .and_then(|d| d.bg_effect_surface.clone())
+    else {
         return;
     };
-    let Some(effect) = data.bg_effect_surface.as_ref() else {
-        return;
-    };
-    let wl_surf = data.layer_surface.wl_surface();
-    match rects {
-        None => {
-            effect.set_blur_region(None);
+
+    if rects.is_empty() {
+        effect.set_blur_region(None);
+    } else {
+        // Copy semantics: the region may be dropped as soon as the request is sent.
+        let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) else {
+            return;
+        };
+        for r in &rects {
+            region.add(r.x, r.y, r.width, r.height);
         }
-        Some(rects) => {
-            if let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) {
-                for r in &rects {
-                    region.add(r.x, r.y, r.width, r.height);
-                }
-                effect.set_blur_region(Some(region.wl_region()));
-            }
-        }
+        effect.set_blur_region(Some(region.wl_region()));
     }
-    wl_surf.commit();
+
+    // Cached only once the request is out, so a failed region is retried.
+    if let Some(data) = state.surfaces.get_mut(&wl) {
+        data.blur_region = Some(rects);
+    }
 }
 
 /// Flush pending surface creations.

@@ -45,8 +45,10 @@ pub(crate) struct SurfaceData {
     /// `ext_background_effect_surface_v1` proxy, created lazily on first use
     /// if the manager global is available.
     pub bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
-    /// Last blur region pushed, so we only re-send when it changes.
-    pub blur_region: Vec<crate::task_impl::BlurRect>,
+    /// Last blur region pushed, so we only re-send when it changes. `None` until
+    /// the first push, which has to happen even when the region is empty: a
+    /// compositor may blur the whole surface by policy until we say otherwise.
+    pub blur_region: Option<Vec<crate::task_impl::BlurRect>>,
 }
 
 /// Central Wayland state, holding all SCTK protocol states and event queues.
@@ -174,7 +176,7 @@ impl WaylandState {
                 needs_rerender: false,
                 current_output: None,
                 bg_effect_surface: None,
-                blur_region: Vec::new(),
+                blur_region: None,
             },
         );
         self.surface_id_map.insert(id, wl_surface);

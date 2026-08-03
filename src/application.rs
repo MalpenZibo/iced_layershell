@@ -24,13 +24,13 @@ use smithay_client_toolkit::shell::wlr_layer::LayerShell;
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
 
-use crate::blur::CollectBlurRegions;
+use crate::blur;
 use crate::error::Error;
 use crate::event_loop::WakeupSender;
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
 use crate::surface_manager::{
-    IcedSurface, apply_layer_shell_command, apply_set_blur_region, create_layer_surface,
+    IcedSurface, apply_blur_region, apply_layer_shell_command, create_layer_surface,
     flush_pending_creations, scaled_cursor, sync_iced_surfaces,
 };
 use crate::task_impl::Task;
@@ -649,10 +649,6 @@ where
             surface_ids.extend(iced_surfaces.keys().copied());
             let message_count_before_redraw = all_messages.len();
 
-            // Applied after the surface loop, once the `data` borrow of
-            // `wl_state.surfaces` is released.
-            let mut pending_blur: Vec<(SurfaceId, Vec<crate::task_impl::BlurRect>)> = Vec::new();
-
             for surface_id in &surface_ids {
                 let iced_s = match iced_surfaces.get_mut(surface_id) {
                     Some(s) if s.needs_redraw => {
@@ -668,10 +664,15 @@ where
                     Some(wl) => wl.clone(),
                     None => continue,
                 };
-                let data = match wl_state.surfaces.get_mut(&wl_surface) {
-                    Some(d) if d.configured && d.size.0 > 0 && d.size.1 > 0 => d,
-                    _ => continue,
-                };
+                // Checked without holding a borrow: pushing the blur region below
+                // needs `&mut wl_state` before we take `data` for presenting.
+                if !wl_state
+                    .surfaces
+                    .get(&wl_surface)
+                    .is_some_and(|d| d.configured && d.size.0 > 0 && d.size.1 > 0)
+                {
+                    continue;
+                }
 
                 let Some(ui) = user_interfaces.get_mut(surface_id) else {
                     continue;
@@ -700,25 +701,26 @@ where
                     }
                 );
 
-                // Draw
+                // Draw. `blur_container` widgets record their regions as they
+                // draw, so no second pass over the tree is needed.
+                let blur_enabled = wl_state.bg_effect_supports_blur;
+                blur::begin_frame(blur_enabled);
                 let style = iced_core::renderer::Style {
                     text_color: theme.palette().text,
                 };
                 ui.draw(&mut renderer, &theme, &style, cursor);
 
-                // After draw so bounds/radii are final; skipped entirely when
-                // the compositor can't blur.
-                if wl_state.bg_effect_supports_blur {
-                    let mut op = CollectBlurRegions::new();
-                    ui.operate(&renderer, &mut op);
-                    let new_region = op.into_blur_rects();
-                    if new_region != data.blur_region {
-                        data.blur_region.clone_from(&new_region);
-                        pending_blur.push((*surface_id, new_region));
-                    }
+                // Before the present below, so the buffer commit applies the
+                // region and the content together.
+                if blur_enabled {
+                    let region = blur::take_rects(app_scale);
+                    apply_blur_region(&mut wl_state, *surface_id, region, &qh);
                 }
 
                 // Present
+                let Some(data) = wl_state.surfaces.get_mut(&wl_surface) else {
+                    continue;
+                };
                 if data.frame_pending {
                     data.needs_rerender = true;
                 } else {
@@ -792,12 +794,6 @@ where
                         }
                     }
                 }
-            }
-
-            // Empty region -> clear.
-            for (id, rects) in pending_blur.drain(..) {
-                let arg = if rects.is_empty() { None } else { Some(rects) };
-                apply_set_blur_region(&mut wl_state, id, arg, &qh);
             }
 
             if all_messages.len() == message_count_before_redraw {
