@@ -253,12 +253,15 @@ where
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.content.as_widget_mut().operate(
-            &mut tree.children[0],
-            layout.children().next().unwrap(),
-            renderer,
-            operation,
-        );
+        operation.container(None, layout.bounds());
+        operation.traverse(&mut |operation| {
+            self.content.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout.children().next().unwrap(),
+                renderer,
+                operation,
+            );
+        });
     }
 
     fn update(
