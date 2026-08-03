@@ -1,6 +1,7 @@
 use iced_layershell::{
-    Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
-    Length, SurfaceId, Task, application, button, clipboard, container, row, text, text_input,
+    Alignment, Anchor, Border, Color, Element, Error, KeyboardInteractivity, Layer,
+    LayerShellSettings, Length, SurfaceId, Task, Theme, application, blur_container, button,
+    clipboard, container, row, text, text_input,
 };
 
 struct App {
@@ -47,7 +48,7 @@ fn update(app: &mut App, msg: Msg) -> Task<Msg> {
 }
 
 fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
-    let btn_style = |_theme: &iced_layershell::Theme, status: button::Status| match status {
+    let btn_style = |_theme: &Theme, status: button::Status| match status {
         button::Status::Hovered => button::Style {
             background: Some(Color::from_rgb(0.4, 0.4, 0.7).into()),
             text_color: Color::WHITE,
@@ -60,7 +61,10 @@ fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
         },
     };
 
-    container(
+    // `blur_container` is a `container` that also asks the compositor to blur
+    // the wallpaper behind it, following the corner radius of this style. On a
+    // compositor without `ext-background-effect-v1` it is just a `container`.
+    let island = blur_container(
         row![
             button(text(" - ").size(14))
                 .on_press(Msg::Decrement)
@@ -80,9 +84,14 @@ fn view(app: &App, _id: SurfaceId) -> Element<'_, Msg> {
         .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding(4)
-    .center_y(Length::Fill)
-    .into()
+    .padding([2, 10])
+    .style(|theme: &Theme| container::Style {
+        background: Some(theme.palette().background.scale_alpha(0.6).into()),
+        border: Border::default().rounded(12),
+        ..container::Style::default()
+    });
+
+    container(island).padding(4).center_y(Length::Fill).into()
 }
 
 fn main() -> Result<(), Error> {

@@ -20,6 +20,10 @@ use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, QueueHandle};
+use wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 
 use crate::settings::{OutputEvent, OutputId, OutputInfo, SurfaceId};
 
@@ -38,6 +42,13 @@ pub(crate) struct SurfaceData {
     /// events. `None` until the compositor maps the surface (or after a
     /// `wl_surface.leave` if not re-entered).
     pub current_output: Option<OutputId>,
+    /// `ext_background_effect_surface_v1` proxy, created lazily on first use
+    /// if the manager global is available.
+    pub bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
+    /// Last blur region pushed, so we only re-send when it changes. `None` until
+    /// the first push, which has to happen even when the region is empty: a
+    /// compositor may blur the whole surface by policy until we say otherwise.
+    pub blur_region: Option<Vec<crate::task_impl::BlurRect>>,
 }
 
 /// Central Wayland state, holding all SCTK protocol states and event queues.
@@ -83,6 +94,10 @@ pub(crate) struct WaylandState {
     pub current_mouse_interaction: iced_core::mouse::Interaction,
     pub pointer_enter_serial: u32,
     pub wl_pointer: Option<WlPointer>,
+
+    // ext-background-effect-v1 (compositor-side blur regions)
+    pub bg_effect_manager: Option<ExtBackgroundEffectManagerV1>,
+    pub bg_effect_supports_blur: bool,
 
     // Calloop loop handle for keyboard repeat
     pub loop_handle: LoopHandle<'static, WaylandState>,
@@ -131,6 +146,8 @@ impl WaylandState {
             current_mouse_interaction: iced_core::mouse::Interaction::default(),
             pointer_enter_serial: 0,
             wl_pointer: None,
+            bg_effect_manager: None,
+            bg_effect_supports_blur: false,
             loop_handle,
             display_ptr,
         }
@@ -158,6 +175,8 @@ impl WaylandState {
                 frame_pending: false,
                 needs_rerender: false,
                 current_output: None,
+                bg_effect_surface: None,
+                blur_region: None,
             },
         );
         self.surface_id_map.insert(id, wl_surface);

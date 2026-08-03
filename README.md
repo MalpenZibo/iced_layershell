@@ -29,6 +29,7 @@ This library is **tailored for ashell**. It implements exactly the features ashe
 - HiDPI support with configurable application scale factor
 - Output (monitor) tracking with connect/disconnect subscriptions
 - Persistent widget UIs with iced's `UserInterface` caching
+- Compositor-side background blur (`ext-background-effect-v1`) via `blur_container`
 
 ## Usage
 
@@ -51,6 +52,35 @@ fn main() -> Result<(), Error> {
 ```
 
 See [`examples/`](examples/) for working demos.
+
+## Background blur
+
+`blur_container` is a `container` that additionally asks the compositor to blur
+the wallpaper behind it, using the corner radius of its own style to shape the
+blurred region:
+
+```rust
+use iced_layershell::{Border, Theme, container, widget::blur_container};
+
+blur_container(content)
+    .padding(8)
+    .style(|theme: &Theme| container::Style {
+        background: Some(theme.palette().background.scale_alpha(0.6).into()),
+        border: Border::default().rounded(12),
+        ..container::Style::default()
+    })
+```
+
+Blur is only visible behind a translucent background, so give the container one.
+The region is recomputed as the widget draws and pushed to the compositor only
+when it changes. On a compositor that doesn't implement
+[`ext-background-effect-v1`](https://wayland.app/protocols/ext-background-effect-v1)
+(or that reports no blur capability) this is exactly a `container` and costs
+nothing.
+
+`blur(radius, content)` is a shorthand for a `blur_container` that draws no
+background of its own — use it when something else already paints the rounded
+surface.
 
 ## What is NOT supported
 

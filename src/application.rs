@@ -24,13 +24,14 @@ use smithay_client_toolkit::shell::wlr_layer::LayerShell;
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
 
+use crate::blur;
 use crate::error::Error;
 use crate::event_loop::WakeupSender;
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
 use crate::surface_manager::{
-    IcedSurface, apply_layer_shell_command, create_layer_surface, flush_pending_creations,
-    scaled_cursor, sync_iced_surfaces,
+    IcedSurface, apply_blur_region, apply_layer_shell_command, create_layer_surface,
+    flush_pending_creations, scaled_cursor, sync_iced_surfaces,
 };
 use crate::task_impl::Task;
 use crate::ui_builder::{build_single_ui, build_user_interfaces};
@@ -189,6 +190,12 @@ where
         )
         .ok();
 
+    // ext-background-effect-v1: bind if the compositor advertises it.
+    // None where the protocol is unsupported — the feature simply no-ops.
+    let bg_effect_manager: Option<
+        wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+    > = globals.bind(&qh, 1..=1, ()).ok();
+
     // Create calloop event loop early so we can pass the LoopHandle to
     // keyboard with repeat (new_capability fires during roundtrip)
     let mut event_loop: EventLoop<WaylandState> =
@@ -205,6 +212,7 @@ where
         &conn,
     );
     wl_state.cursor_shape_manager = cursor_shape_manager;
+    wl_state.bg_effect_manager = bg_effect_manager;
 
     // Create initial layer surface (SurfaceId::MAIN)
     let (initial_layer, initial_scale) = create_layer_surface(
@@ -316,7 +324,6 @@ where
         &mut wl_state,
         &mut runtime,
         &mut pending_creations,
-        &qh,
         &exit_flag,
         &ping,
     );
@@ -380,8 +387,15 @@ where
         for closed_id in wl_state.closed_surfaces.drain(..) {
             user_interfaces.remove(&closed_id);
             iced_surfaces.remove(&closed_id);
-            if let Some(wl_surface) = wl_state.surface_id_map.remove(&closed_id) {
-                wl_state.surfaces.remove(&wl_surface);
+            if let Some(wl_surface) = wl_state.surface_id_map.remove(&closed_id)
+                && let Some(data) = wl_state.surfaces.remove(&wl_surface)
+            {
+                // Release the background-effect proxy explicitly — wayland-client
+                // doesn't auto-destroy on Drop, so without this the server leaks
+                // the resource until disconnection.
+                if let Some(effect) = data.bg_effect_surface {
+                    effect.destroy();
+                }
             }
             if wl_state.pointer_surface == Some(closed_id) {
                 wl_state.pointer_surface = None;
@@ -562,7 +576,6 @@ where
                     &mut wl_state,
                     &mut runtime,
                     &mut pending_creations,
-                    &qh,
                     &exit_flag,
                     &ping,
                 ));
@@ -651,10 +664,15 @@ where
                     Some(wl) => wl.clone(),
                     None => continue,
                 };
-                let data = match wl_state.surfaces.get_mut(&wl_surface) {
-                    Some(d) if d.configured && d.size.0 > 0 && d.size.1 > 0 => d,
-                    _ => continue,
-                };
+                // Checked without holding a borrow: pushing the blur region below
+                // needs `&mut wl_state` before we take `data` for presenting.
+                if !wl_state
+                    .surfaces
+                    .get(&wl_surface)
+                    .is_some_and(|d| d.configured && d.size.0 > 0 && d.size.1 > 0)
+                {
+                    continue;
+                }
 
                 let Some(ui) = user_interfaces.get_mut(surface_id) else {
                     continue;
@@ -683,13 +701,26 @@ where
                     }
                 );
 
-                // Draw
+                // Draw. `blur_container` widgets record their regions as they
+                // draw, so no second pass over the tree is needed.
+                let blur_enabled = wl_state.bg_effect_supports_blur;
+                blur::begin_frame(blur_enabled);
                 let style = iced_core::renderer::Style {
                     text_color: theme.palette().text,
                 };
                 ui.draw(&mut renderer, &theme, &style, cursor);
 
+                // Before the present below, so the buffer commit applies the
+                // region and the content together.
+                if blur_enabled {
+                    let region = blur::take_rects(app_scale);
+                    apply_blur_region(&mut wl_state, *surface_id, region, &qh);
+                }
+
                 // Present
+                let Some(data) = wl_state.surfaces.get_mut(&wl_surface) else {
+                    continue;
+                };
                 if data.frame_pending {
                     data.needs_rerender = true;
                 } else {
@@ -791,7 +822,6 @@ where
                     &mut wl_state,
                     &mut runtime,
                     &mut pending_creations,
-                    &qh,
                     &exit_flag,
                     &ping,
                 ));
@@ -919,14 +949,13 @@ fn process_task<M: Send + Clone + 'static>(
         Action<M>,
     >,
     pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
-    qh: &wayland_client::QueueHandle<WaylandState>,
     exit_flag: &Arc<AtomicBool>,
     ping: &calloop::ping::Ping,
 ) -> Vec<Action<M>> {
     let mut actions = Vec::new();
     match task {
         Task::LayerShell(cmd) => {
-            apply_layer_shell_command(cmd, wl_state, pending_creations, qh);
+            apply_layer_shell_command(cmd, wl_state, pending_creations);
         }
         Task::Iced(iced_task) => {
             if let Some(mut stream) = iced_runtime::task::into_stream(iced_task) {
@@ -967,7 +996,6 @@ fn process_task<M: Send + Clone + 'static>(
                     wl_state,
                     runtime,
                     pending_creations,
-                    qh,
                     exit_flag,
                     ping,
                 ));
