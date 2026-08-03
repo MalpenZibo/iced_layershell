@@ -171,18 +171,17 @@ pub(crate) fn apply_blur_region(
         return;
     };
 
-    if rects.is_empty() {
-        effect.set_blur_region(None);
-    } else {
-        // Copy semantics: the region may be dropped as soon as the request is sent.
-        let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) else {
-            return;
-        };
-        for r in &rects {
-            region.add(r.x, r.y, r.width, r.height);
-        }
-        effect.set_blur_region(Some(region.wl_region()));
+    // Always send a region, empty when there is nothing to blur. A NULL region
+    // only withdraws our opinion, which lets a compositor-side rule blur the
+    // whole surface; an empty region says "blur exactly nothing".
+    // Copy semantics: the region may be dropped as soon as the request is sent.
+    let Ok(region) = smithay_client_toolkit::compositor::Region::new(&state.compositor) else {
+        return;
+    };
+    for r in &rects {
+        region.add(r.x, r.y, r.width, r.height);
     }
+    effect.set_blur_region(Some(region.wl_region()));
 
     // Cached only once the request is out, so a failed region is retried.
     if let Some(data) = state.surfaces.get_mut(&wl) {
