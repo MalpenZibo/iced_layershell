@@ -14,7 +14,7 @@ use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerSurface};
 use wayland_client::QueueHandle;
 
 use crate::settings::{LayerShellSettings, SurfaceId};
-use crate::state::WaylandState;
+use crate::state::{SurfaceData, WaylandState};
 use crate::task_impl::{BlurRect, LayerShellCommand};
 use crate::window_handle::WaylandWindow;
 
@@ -293,37 +293,100 @@ pub(crate) fn scaled_cursor(
     }
 }
 
-/// Ensure every registered wayland surface has a corresponding iced rendering surface.
+/// Scale factor the application asks for on a given surface, on top of the
+/// monitor's own scale.
+pub(crate) type ScaleFactorFn<State> = dyn Fn(&State, SurfaceId) -> f32;
+
+/// Resolve the scale of every live surface the frame has not asked about yet.
+///
+/// Only live surfaces are asked: a queued event can outlive the surface it was
+/// meant for, and the application should never be handed an id belonging to a
+/// surface it has already seen destroyed.
+///
+/// Leaving the surfaces already in the map untouched is what keeps a frame
+/// coherent when new ones appear midway through it.
+pub(crate) fn resolve_new_surface_scales<State>(
+    scales: &mut HashMap<SurfaceId, f32>,
+    scale_factor_fn: Option<&ScaleFactorFn<State>>,
+    state: &State,
+    wl_state: &WaylandState,
+) {
+    for data in wl_state.surfaces.values() {
+        scales
+            .entry(data.id)
+            .or_insert_with(|| scale_factor_fn.map_or(1.0, |f| f(state, data.id)));
+    }
+}
+
+/// Take the frame's scale snapshot, discarding the previous one.
+///
+/// One snapshot per frame, because `update` runs between the point where a
+/// viewport is sized and the point where the cursor and the blur region are
+/// derived from it. Resolving separately at each of those would let them
+/// disagree, putting the pointer in the wrong place and handing the compositor
+/// a misscaled region.
+pub(crate) fn refresh_surface_scales<State>(
+    scales: &mut HashMap<SurfaceId, f32>,
+    scale_factor_fn: Option<&ScaleFactorFn<State>>,
+    state: &State,
+    wl_state: &WaylandState,
+) {
+    scales.clear();
+    resolve_new_surface_scales(scales, scale_factor_fn, state, wl_state);
+}
+
+/// The scale for one surface, `1.0` for a surface that no longer exists.
+pub(crate) fn scale_of(scales: &HashMap<SurfaceId, f32>, id: SurfaceId) -> f32 {
+    scales.get(&id).copied().unwrap_or(1.0)
+}
+
+/// The viewport a surface should have: its size in physical pixels, at the
+/// monitor's scale combined with the application's.
+///
+/// `None` while the compositor has not given the surface a size yet.
 #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+pub(crate) fn surface_viewport(
+    data: &SurfaceData,
+    scales: &HashMap<SurfaceId, f32>,
+) -> Option<Viewport> {
+    let (width, height) = data.size;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let monitor_scale = data.scale_factor.max(1);
+
+    Some(Viewport::with_physical_size(
+        iced_core::Size::new(width * monitor_scale as u32, height * monitor_scale as u32),
+        monitor_scale as f32 * scale_of(scales, data.id),
+    ))
+}
+
+/// Ensure every registered wayland surface has a corresponding iced rendering surface.
 pub(crate) fn sync_iced_surfaces(
     wl_state: &WaylandState,
     compositor: &mut Compositor,
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
-    app_scale: impl Fn(SurfaceId) -> f32,
+    scales: &HashMap<SurfaceId, f32>,
 ) {
     for (wl_surface, data) in &wl_state.surfaces {
         if iced_surfaces.contains_key(&data.id) {
             continue;
         }
         // Only create wgpu surface after configure (need real dimensions)
-        if !data.configured || data.size.0 == 0 || data.size.1 == 0 {
+        if !data.configured {
             continue;
         }
+        let Some(viewport) = surface_viewport(data, scales) else {
+            continue;
+        };
         if let Some(window) = WaylandWindow::new(wl_state.display_ptr, wl_surface) {
-            let monitor_scale = data.scale_factor.max(1) as u32;
-            let (w, h) = (
-                data.size.0 * monitor_scale.max(1),
-                data.size.1 * monitor_scale.max(1),
-            );
-            let combined_scale = data.scale_factor as f32 * app_scale(data.id);
+            let (w, h) = (viewport.physical_width(), viewport.physical_height());
             iced_surfaces.insert(
                 data.id,
                 IcedSurface {
                     surface: compositor.create_surface(window, w, h),
-                    viewport: Viewport::with_physical_size(
-                        iced_core::Size::new(w, h),
-                        combined_scale,
-                    ),
+                    viewport,
                     cache: None,
                     needs_redraw: true,
                 },
