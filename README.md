@@ -46,7 +46,7 @@ fn main() -> Result<(), Error> {
             ..Default::default()
         })
         .subscription(subscription)
-        .theme(|state| state.theme.clone())
+        .theme(|state, _id| state.theme.clone())
         .run()
 }
 ```
