@@ -255,6 +255,7 @@ where
         .get(&main_wl)
         .ok_or_else(|| Error::EventLoop("main surface data missing after registration".into()))?;
     let monitor_scale = main_data.scale_factor.max(1) as u32;
+    let main_monitor_scale = main_data.scale_factor as f32;
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
         // Convert surface-local to physical pixels
         (
@@ -293,20 +294,6 @@ where
         compositor.load_font(font_bytes.clone());
     }
 
-    let initial_app_scale = 1.0f32;
-    let initial_scale = main_data.scale_factor as f32 * initial_app_scale;
-
-    let mut iced_surfaces: HashMap<SurfaceId, IcedSurface> = HashMap::new();
-    iced_surfaces.insert(
-        SurfaceId::MAIN,
-        IcedSurface {
-            surface: compositor.create_surface(window_handle, width, height),
-            viewport: Viewport::with_physical_size(Size::new(width, height), initial_scale),
-            needs_redraw: true,
-            cache: None,
-        },
-    );
-
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
     let (ping, ping_source) =
@@ -321,6 +308,22 @@ where
 
     let (mut user_state, boot_task) = runtime.enter(|| (app.boot)());
     let scale_factor_fn = app.scale_factor_fn.as_deref();
+
+    // After boot, so the surface is built with the scale the application asks
+    // for rather than a placeholder it would have to correct on the next frame.
+    let initial_scale =
+        main_monitor_scale * surface_scale(scale_factor_fn, &user_state, SurfaceId::MAIN);
+
+    let mut iced_surfaces: HashMap<SurfaceId, IcedSurface> = HashMap::new();
+    iced_surfaces.insert(
+        SurfaceId::MAIN,
+        IcedSurface {
+            surface: compositor.create_surface(window_handle, width, height),
+            viewport: Viewport::with_physical_size(Size::new(width, height), initial_scale),
+            needs_redraw: true,
+            cache: None,
+        },
+    );
 
     // Process boot task (no UIs exist yet, so sync actions are discarded)
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
@@ -342,7 +345,9 @@ where
         .map_err(|e| Error::EventLoop(e.to_string()))?;
 
     // Create iced rendering surfaces for everything registered
-    sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |_| 1.0);
+    sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |id| {
+        surface_scale(scale_factor_fn, &user_state, id)
+    });
 
     event_loop
         .handle()
