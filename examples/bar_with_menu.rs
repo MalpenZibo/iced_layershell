@@ -1,7 +1,7 @@
 use iced_layershell::widget::Column;
 use iced_layershell::{
-    Alignment, Anchor, Color, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings,
-    Length, SurfaceId, Task, application, button, container, destroy_layer_surface,
+    Alignment, Anchor, Element, Error, KeyboardInteractivity, Layer, LayerShellSettings, Length,
+    SurfaceId, Task, Theme, application, button, container, destroy_layer_surface,
     new_layer_surface, row, text,
 };
 
@@ -94,8 +94,8 @@ fn view(app: &App, id: SurfaceId) -> Element<'_, Msg> {
                 .spacing(10)
                 .align_x(Alignment::Center),
         )
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.7).into()),
+        .style(|theme: &Theme| container::Style {
+            background: Some(theme.palette().background.scale_alpha(0.9).into()),
             ..Default::default()
         })
         .center(Length::Fill)
@@ -103,8 +103,18 @@ fn view(app: &App, id: SurfaceId) -> Element<'_, Msg> {
     }
 }
 
+/// The bar and the menu are separate surfaces, so each can have its own theme.
+fn theme(_app: &App, id: SurfaceId) -> Theme {
+    if id == SurfaceId::MAIN {
+        Theme::CatppuccinMocha
+    } else {
+        Theme::CatppuccinLatte
+    }
+}
+
 fn main() -> Result<(), Error> {
     application(boot, update, view)
+        .theme(theme)
         .layer_shell(LayerShellSettings {
             anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
             layer: Layer::Top,
