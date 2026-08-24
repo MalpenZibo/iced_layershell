@@ -50,7 +50,7 @@ pub struct Application<State, Message> {
     view: Box<dyn for<'a> Fn(&'a State, SurfaceId) -> Element<'a, Message>>,
     initial_settings: Option<LayerShellSettings>,
     subscription_fn: Option<Box<dyn Fn(&State) -> iced_futures::Subscription<Message>>>,
-    theme_fn: Option<Box<dyn Fn(&State) -> Theme>>,
+    theme_fn: Option<Box<dyn Fn(&State, SurfaceId) -> Theme>>,
     scale_factor_fn: Option<Box<dyn Fn(&State) -> f64>>,
     fonts: Vec<Cow<'static, [u8]>>,
     default_font: Font,
@@ -77,8 +77,9 @@ where
         self
     }
 
-    /// Set the theme function. Called each frame to determine the current theme.
-    pub fn theme(mut self, f: impl Fn(&State) -> Theme + 'static) -> Self {
+    /// Set the theme function. Called once per surface per frame, so each
+    /// surface can be drawn with its own theme.
+    pub fn theme(mut self, f: impl Fn(&State, SurfaceId) -> Theme + 'static) -> Self {
         self.theme_fn = Some(Box::new(f));
         self
     }
@@ -495,11 +496,6 @@ where
             surface_events.entry(sid).or_default().push(event);
         }
 
-        let theme = app
-            .theme_fn
-            .as_ref()
-            .map_or(Theme::CatppuccinMocha, |f| f(&user_state));
-
         all_messages.clear();
         all_messages.append(&mut runtime_messages);
         let has_runtime_messages = !all_messages.is_empty();
@@ -701,6 +697,10 @@ where
                 // Draw. `blur_container` widgets record their regions as they draw.
                 let blur_enabled = wl_state.bg_effect_supports_blur;
                 blur::begin_frame(blur_enabled);
+                let theme = app
+                    .theme_fn
+                    .as_ref()
+                    .map_or(Theme::CatppuccinMocha, |f| f(&user_state, *surface_id));
                 let style = iced_core::renderer::Style {
                     text_color: theme.palette().text,
                 };
