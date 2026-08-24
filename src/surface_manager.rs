@@ -299,7 +299,7 @@ pub(crate) fn sync_iced_surfaces(
     wl_state: &WaylandState,
     compositor: &mut Compositor,
     iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
-    app_scale: f32,
+    app_scale: impl Fn(SurfaceId) -> f32,
 ) {
     for (wl_surface, data) in &wl_state.surfaces {
         if iced_surfaces.contains_key(&data.id) {
@@ -315,7 +315,7 @@ pub(crate) fn sync_iced_surfaces(
                 data.size.0 * monitor_scale.max(1),
                 data.size.1 * monitor_scale.max(1),
             );
-            let combined_scale = data.scale_factor as f32 * app_scale;
+            let combined_scale = data.scale_factor as f32 * app_scale(data.id);
             iced_surfaces.insert(
                 data.id,
                 IcedSurface {

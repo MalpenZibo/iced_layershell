@@ -40,6 +40,10 @@ use crate::window_handle::WaylandWindow;
 
 type Element<'a, M> = iced_core::Element<'a, M, Theme, iced_renderer::Renderer>;
 
+/// Scale factor the application asks for on a given surface, on top of the
+/// monitor's own scale.
+type ScaleFactorFn<State> = dyn Fn(&State, SurfaceId) -> f32;
+
 /// Builder for a layer shell application.
 ///
 /// Created via [`application()`], configured with builder methods, then started with [`run()`](Self::run).
@@ -51,7 +55,7 @@ pub struct Application<State, Message> {
     initial_settings: Option<LayerShellSettings>,
     subscription_fn: Option<Box<dyn Fn(&State) -> iced_futures::Subscription<Message>>>,
     theme_fn: Option<Box<dyn Fn(&State, SurfaceId) -> Theme>>,
-    scale_factor_fn: Option<Box<dyn Fn(&State) -> f64>>,
+    scale_factor_fn: Option<Box<ScaleFactorFn<State>>>,
     fonts: Vec<Cow<'static, [u8]>>,
     default_font: Font,
     antialiasing: bool,
@@ -96,9 +100,9 @@ where
         self
     }
 
-    /// Set the application scale factor (on top of monitor DPI).
+    /// Set the application scale factor (on top of monitor DPI), per surface.
     /// For example, 1.2 means 120% zoom. Default is 1.0.
-    pub fn scale_factor(mut self, f: impl Fn(&State) -> f64 + 'static) -> Self {
+    pub fn scale_factor(mut self, f: impl Fn(&State, SurfaceId) -> f32 + 'static) -> Self {
         self.scale_factor_fn = Some(Box::new(f));
         self
     }
@@ -316,6 +320,7 @@ where
     let exit_flag = Arc::new(AtomicBool::new(false));
 
     let (mut user_state, boot_task) = runtime.enter(|| (app.boot)());
+    let scale_factor_fn = app.scale_factor_fn.as_deref();
 
     // Process boot task (no UIs exist yet, so sync actions are discarded)
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
@@ -337,7 +342,7 @@ where
         .map_err(|e| Error::EventLoop(e.to_string()))?;
 
     // Create iced rendering surfaces for everything registered
-    sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, 1.0);
+    sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |_| 1.0);
 
     event_loop
         .handle()
@@ -429,8 +434,6 @@ where
 
         crate::output_subscription::push_events(mem::take(&mut wl_state.output_events));
 
-        let app_scale = app.scale_factor_fn.as_ref().map_or(1.0, |f| f(&user_state)) as f32;
-
         for data in wl_state.surfaces.values() {
             if let Some(iced) = iced_surfaces.get_mut(&data.id) {
                 let (sw, sh) = data.size;
@@ -438,7 +441,8 @@ where
                     let monitor_scale = data.scale_factor.max(1) as u32;
                     let phys_w = sw * monitor_scale.max(1);
                     let phys_h = sh * monitor_scale.max(1);
-                    let combined_scale = data.scale_factor as f32 * app_scale;
+                    let combined_scale = data.scale_factor as f32
+                        * surface_scale(scale_factor_fn, &user_state, data.id);
                     let new_vp =
                         Viewport::with_physical_size(Size::new(phys_w, phys_h), combined_scale);
                     if iced.viewport.physical_size() != new_vp.physical_size()
@@ -454,12 +458,16 @@ where
         }
 
         // Create iced rendering surfaces for newly configured wayland surfaces
-        sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+        sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |id| {
+            surface_scale(scale_factor_fn, &user_state, id)
+        });
 
         let pending_events = mem::take(&mut wl_state.pending_events);
-        let scale = |p: iced_core::Point| iced_core::Point::new(p.x / app_scale, p.y / app_scale);
         surface_events.clear();
         for (sid, event) in pending_events {
+            let app_scale = surface_scale(scale_factor_fn, &user_state, sid);
+            let scale =
+                |p: iced_core::Point| iced_core::Point::new(p.x / app_scale, p.y / app_scale);
             let event = match event {
                 iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved { position }) => {
                     iced_core::Event::Mouse(iced_core::mouse::Event::CursorMoved {
@@ -513,7 +521,11 @@ where
                 continue;
             };
 
-            let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
+            let cursor = scaled_cursor(
+                &wl_state,
+                *surface_id,
+                surface_scale(scale_factor_fn, &user_state, *surface_id),
+            );
 
             let (ui_state, statuses) = ui.update(
                 &events,
@@ -613,7 +625,9 @@ where
 
         // Create newly requested surfaces
         flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
-        sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+        sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |id| {
+            surface_scale(scale_factor_fn, &user_state, id)
+        });
 
         // Build UIs for newly created surfaces
         {
@@ -651,7 +665,11 @@ where
                     _ => continue,
                 };
 
-                let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
+                let cursor = scaled_cursor(
+                    &wl_state,
+                    *surface_id,
+                    surface_scale(scale_factor_fn, &user_state, *surface_id),
+                );
 
                 let wl_surface = match wl_state.surface_id_map.get(surface_id) {
                     Some(wl) => wl.clone(),
@@ -709,7 +727,8 @@ where
                 // Before present, so the buffer commit applies region and content
                 // together.
                 if blur_enabled {
-                    let region = blur::take_rects(app_scale);
+                    let region =
+                        blur::take_rects(surface_scale(scale_factor_fn, &user_state, *surface_id));
                     apply_blur_region(&mut wl_state, *surface_id, region, &qh);
                 }
 
@@ -855,7 +874,9 @@ where
             }
 
             flush_pending_creations(&mut wl_state, &mut pending_creations, &qh);
-            sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+            sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, |id| {
+                surface_scale(scale_factor_fn, &user_state, id)
+            });
 
             // Mark all surfaces for redraw
             for s in iced_surfaces.values_mut() {
@@ -865,6 +886,15 @@ where
     }
 
     Ok(())
+}
+
+/// The application's scale factor for one surface, `1.0` when it sets none.
+fn surface_scale<State>(
+    scale_factor_fn: Option<&ScaleFactorFn<State>>,
+    state: &State,
+    id: SurfaceId,
+) -> f32 {
+    scale_factor_fn.map_or(1.0, |f| f(state, id))
 }
 
 /// Process a single runtime Action synchronously on the main loop.
