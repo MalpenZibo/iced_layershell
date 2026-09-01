@@ -766,6 +766,9 @@ where
                         || {},
                     ) {
                         Ok(()) => {
+                            // The buffer this commits carries the scale, so the
+                            // blur region may commit the surface again.
+                            data.committed_scale_factor = data.scale_factor;
                             if wants_next_frame {
                                 data.needs_rerender = true;
                             }
