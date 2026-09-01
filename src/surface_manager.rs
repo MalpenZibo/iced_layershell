@@ -128,8 +128,15 @@ pub(crate) fn apply_layer_shell_command(
 /// Push a blur region to the compositor (`ext-background-effect-v1`).
 ///
 /// `set_blur_region` is double-buffered state applied by the next
-/// `wl_surface.commit`, so this deliberately does not commit: the buffer commit
-/// in `present` picks it up and region and content change in the same frame.
+/// `wl_surface.commit`. Leaving it for the buffer commit that `present` issues
+/// loses updates in practice: the surface keeps the region it had until some
+/// later change happens to push a new one through, so a surface that shrinks
+/// stays blurred where it no longer paints. Commit here instead, which applies
+/// the region a commit ahead of the frame that motivated it.
+///
+/// The one commit to withhold is while a `set_buffer_scale` is still waiting
+/// for its buffer: committing then would tag the buffer still attached with the
+/// new scale.
 pub(crate) fn apply_blur_region(
     state: &mut WaylandState,
     id: SurfaceId,
@@ -147,6 +154,7 @@ pub(crate) fn apply_blur_region(
     if data.blur_region.as_deref() == Some(rects.as_slice()) {
         return;
     }
+    let scale_uncommitted = data.committed_scale_factor != data.scale_factor;
 
     // Asking twice for the same surface is a protocol error.
     if data.bg_effect_surface.is_none() {
@@ -176,6 +184,14 @@ pub(crate) fn apply_blur_region(
         region.add(r.x, r.y, r.width, r.height);
     }
     effect.set_blur_region(Some(region.wl_region()));
+
+    // Leave the region for the next commit to carry rather than tagging the
+    // attached buffer with a scale it was not drawn at. Not caching it makes
+    // the next frame push and commit it again.
+    if scale_uncommitted {
+        return;
+    }
+    wl.commit();
 
     // Cached only once the request is out, so a failed region is retried.
     if let Some(data) = state.surfaces.get_mut(&wl) {

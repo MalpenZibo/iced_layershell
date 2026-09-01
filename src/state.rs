@@ -47,6 +47,11 @@ pub(crate) struct SurfaceData {
     /// Last blur region pushed, so we only re-send when it changes. `None` until
     /// the first push, which has to happen even when the region is empty.
     pub blur_region: Option<Vec<crate::task_impl::BlurRect>>,
+    /// Scale the last presented buffer was committed at. While it trails
+    /// `scale_factor` a `set_buffer_scale` is still waiting for its buffer, and
+    /// committing the surface would tag the one still attached with the new
+    /// scale — a protocol error as soon as its size is not divisible by it.
+    pub committed_scale_factor: i32,
 }
 
 /// Central Wayland state, holding all SCTK protocol states and event queues.
@@ -172,6 +177,7 @@ impl WaylandState {
                 configured: false,
                 frame_pending: false,
                 needs_rerender: false,
+                committed_scale_factor: scale_factor,
                 current_output: None,
                 bg_effect_surface: None,
                 blur_region: None,
