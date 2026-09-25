@@ -28,6 +28,7 @@ impl OutputHandler for WaylandState {
                 .as_ref()
                 .and_then(|i| i.name.clone())
                 .unwrap_or_default(),
+            description: sctk_info.as_ref().and_then(|i| i.description.clone()),
             scale_factor: sctk_info.as_ref().map_or(1, |i| i.scale_factor),
             logical_size: sctk_info
                 .as_ref()
@@ -50,6 +51,7 @@ impl OutputHandler for WaylandState {
             let sctk_info = self.output.info(&output);
             if let Some(si) = sctk_info {
                 existing.name = si.name.clone().unwrap_or_default();
+                existing.description.clone_from(&si.description);
                 existing.scale_factor = si.scale_factor;
                 existing.logical_size = si.logical_size.map(|s| (s.0, s.1));
                 existing.make.clone_from(&si.make);

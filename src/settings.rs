@@ -145,6 +145,7 @@ impl fmt::Display for OutputId {
 pub struct OutputInfo {
     pub id: OutputId,
     pub name: String,
+    pub description: Option<String>,
     pub scale_factor: i32,
     pub logical_size: Option<(i32, i32)>,
     pub make: String,
