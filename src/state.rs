@@ -16,9 +16,11 @@ use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{LayerShell, LayerSurface};
+use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::protocol::wl_touch::WlTouch;
 use wayland_client::{Connection, QueueHandle};
 use wayland_protocols::ext::background_effect::v1::client::{
     ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
@@ -70,6 +72,8 @@ pub(crate) struct WaylandState {
     pub cursor_position: iced_core::Point,
     pub pointer_surface: Option<SurfaceId>,
     pub keyboard_focus: Option<SurfaceId>,
+    pub wl_keyboard: Option<WlKeyboard>,
+    pub wl_touch: Option<WlTouch>,
     pub modifiers: iced_core::keyboard::Modifiers,
 
     // Event queues (drained each frame by the application runner)
@@ -134,6 +138,8 @@ impl WaylandState {
             cursor_position: iced_core::Point::ORIGIN,
             pointer_surface: None,
             keyboard_focus: None,
+            wl_keyboard: None,
+            wl_touch: None,
             modifiers: iced_core::keyboard::Modifiers::empty(),
             pending_events: Vec::new(),
             output_events: Vec::new(),
