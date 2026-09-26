@@ -26,15 +26,52 @@ pub(crate) struct IcedSurface {
     pub needs_redraw: bool,
 }
 
+/// Surfaces requested during an update, created together once it's done by
+/// [`flush_pending_creations`]. A property command sent in the same update
+/// for one of them would otherwise find no surface, so it's held here and
+/// replayed, in order, right after the surface is created.
+#[derive(Default)]
+pub(crate) struct PendingCreations {
+    surfaces: Vec<(SurfaceId, LayerShellSettings)>,
+    commands: Vec<LayerShellCommand>,
+}
+
+impl PendingCreations {
+    pub(crate) fn clear(&mut self) {
+        self.surfaces.clear();
+        self.commands.clear();
+    }
+
+    /// Hold `cmd` if it targets a surface still waiting to be created;
+    /// otherwise hand it back.
+    fn defer(&mut self, id: SurfaceId, cmd: LayerShellCommand) -> Option<LayerShellCommand> {
+        if self.surfaces.iter().any(|(pending, _)| *pending == id) {
+            self.commands.push(cmd);
+            None
+        } else {
+            Some(cmd)
+        }
+    }
+}
+
 /// Apply a synchronous layer shell command (surface create/destroy, property changes).
 pub(crate) fn apply_layer_shell_command(
     cmd: LayerShellCommand,
     state: &mut WaylandState,
-    pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
+    pending_creations: &mut PendingCreations,
 ) {
+    if let Some(id) = cmd.property_target()
+        && !state.surface_id_map.contains_key(&id)
+    {
+        if let Some(cmd) = pending_creations.defer(id, cmd) {
+            log::warn!("Ignoring {cmd:?}: surface {id:?} does not exist");
+        }
+        return;
+    }
+
     match cmd {
         LayerShellCommand::NewSurface(id, settings) => {
-            pending_creations.push((id, settings));
+            pending_creations.surfaces.push((id, settings));
         }
         LayerShellCommand::DestroySurface(id) => {
             state.closed_surfaces.push(id);
@@ -199,16 +236,20 @@ pub(crate) fn apply_blur_region(
     }
 }
 
-/// Flush pending surface creations.
+/// Flush pending surface creations, then replay the commands held for them.
 pub(crate) fn flush_pending_creations(
     wl: &mut WaylandState,
-    pending: &mut Vec<(SurfaceId, LayerShellSettings)>,
+    pending: &mut PendingCreations,
     qh: &QueueHandle<WaylandState>,
 ) {
-    while let Some((id, settings)) = pending.pop() {
+    while let Some((id, settings)) = pending.surfaces.pop() {
         let (layer, scale) =
             create_layer_surface(&wl.compositor, &wl.layer_shell, qh, &settings, wl);
         wl.register_surface(id, layer, scale);
+    }
+    // Every held command's surface exists now, so none is deferred again.
+    for cmd in std::mem::take(&mut pending.commands) {
+        apply_layer_shell_command(cmd, wl, pending);
     }
 }
 
