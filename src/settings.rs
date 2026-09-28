@@ -145,6 +145,9 @@ impl fmt::Display for OutputId {
 pub struct OutputInfo {
     pub id: OutputId,
     pub name: String,
+    /// Compositor-provided description of the output. The protocol defines no
+    /// format (Hyprland sends "make model serial (connector)"). `None` if the
+    /// compositor doesn't send one.
     pub description: Option<String>,
     pub scale_factor: i32,
     pub logical_size: Option<(i32, i32)>,
