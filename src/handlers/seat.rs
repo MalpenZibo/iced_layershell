@@ -83,6 +83,7 @@ impl SeatHandler for WaylandState {
                     keyboard.release();
                 }
                 self.keyboard_focus = None;
+                self.modifiers = iced_core::keyboard::Modifiers::empty();
             }
             Capability::Touch => {
                 if let Some(touch) = self.wl_touch.take()
@@ -90,6 +91,7 @@ impl SeatHandler for WaylandState {
                 {
                     touch.release();
                 }
+                self.lose_all_fingers();
             }
             _ => {}
         }
