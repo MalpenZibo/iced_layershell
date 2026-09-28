@@ -33,6 +33,23 @@ pub enum LayerShellCommand {
     SetInputRegion(SurfaceId, Option<Vec<InputRegionRect>>),
 }
 
+impl LayerShellCommand {
+    /// The surface a property command changes. `None` for creation and
+    /// destruction, which don't need the surface to exist yet.
+    pub(crate) fn property_target(&self) -> Option<SurfaceId> {
+        match self {
+            Self::NewSurface(..) | Self::DestroySurface(_) => None,
+            Self::SetAnchor(id, _)
+            | Self::SetLayer(id, _)
+            | Self::SetExclusiveZone(id, _)
+            | Self::SetKeyboardInteractivity(id, _)
+            | Self::SetSize(id, _)
+            | Self::SetMargin(id, _)
+            | Self::SetInputRegion(id, _) => Some(*id),
+        }
+    }
+}
+
 /// A task that can be either a standard iced task or a layer shell command.
 ///
 /// This wraps iced's `Task<M>` to also support layer shell commands,

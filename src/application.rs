@@ -30,9 +30,9 @@ use crate::event_loop::WakeupSender;
 use crate::settings::{LayerShellSettings, SurfaceId};
 use crate::state::WaylandState;
 use crate::surface_manager::{
-    IcedSurface, ScaleFactorFn, apply_blur_region, apply_layer_shell_command, create_layer_surface,
-    flush_pending_creations, refresh_surface_scales, resolve_new_surface_scales, scale_of,
-    scaled_cursor, surface_viewport, sync_iced_surfaces,
+    IcedSurface, PendingCreations, ScaleFactorFn, apply_blur_region, apply_layer_shell_command,
+    create_layer_surface, flush_pending_creations, refresh_surface_scales,
+    resolve_new_surface_scales, scale_of, scaled_cursor, surface_viewport, sync_iced_surfaces,
 };
 use crate::task_impl::Task;
 use crate::ui_builder::{build_single_ui, build_user_interfaces};
@@ -330,7 +330,7 @@ where
     );
 
     // Process boot task (no UIs exist yet, so sync actions are discarded)
-    let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+    let mut pending_creations = PendingCreations::default();
     let _ = process_task(
         boot_task,
         &mut wl_state,
@@ -378,7 +378,7 @@ where
     let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
     let mut all_messages: Vec<Message> = Vec::new();
     let mut surface_ids: Vec<SurfaceId> = Vec::new();
-    let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
+    let mut pending_creations = PendingCreations::default();
 
     let mut first_frame = true;
     while running {
@@ -991,7 +991,7 @@ fn process_task<M: Send + Clone + 'static>(
         WakeupSender<M>,
         Action<M>,
     >,
-    pending_creations: &mut Vec<(SurfaceId, LayerShellSettings)>,
+    pending_creations: &mut PendingCreations,
     exit_flag: &Arc<AtomicBool>,
     ping: &calloop::ping::Ping,
 ) -> Vec<Action<M>> {
