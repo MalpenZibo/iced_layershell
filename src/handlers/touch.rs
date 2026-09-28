@@ -11,6 +11,22 @@ use wayland_client::{Connection, QueueHandle};
 
 use crate::state::WaylandState;
 
+impl WaylandState {
+    #[allow(clippy::cast_sign_loss)]
+    pub(crate) fn lose_all_fingers(&mut self) {
+        self.pending_finger_removals.clear();
+        for (id, (surface_id, pos)) in self.touch_fingers.drain() {
+            self.pending_events.push((
+                surface_id,
+                iced_core::Event::Touch(iced_core::touch::Event::FingerLost {
+                    id: iced_core::touch::Finger(id as u64),
+                    position: pos,
+                }),
+            ));
+        }
+    }
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -86,16 +102,7 @@ impl TouchHandler for WaylandState {
     }
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &WlTouch) {
-        self.pending_finger_removals.clear();
-        for (id, (surface_id, pos)) in self.touch_fingers.drain() {
-            self.pending_events.push((
-                surface_id,
-                iced_core::Event::Touch(iced_core::touch::Event::FingerLost {
-                    id: iced_core::touch::Finger(id as u64),
-                    position: pos,
-                }),
-            ));
-        }
+        self.lose_all_fingers();
     }
 
     fn shape(
