@@ -6,7 +6,7 @@
 use smithay_client_toolkit::delegate_seat;
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use wayland_client::protocol::wl_seat::WlSeat;
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Proxy, QueueHandle};
 
 use crate::handlers::keyboard::make_key_pressed;
 use crate::state::WaylandState;
@@ -27,7 +27,8 @@ impl SeatHandler for WaylandState {
     ) {
         match capability {
             Capability::Keyboard => {
-                self.seat
+                self.wl_keyboard = self
+                    .seat
                     .get_keyboard_with_repeat(
                         qh,
                         &seat,
@@ -53,7 +54,7 @@ impl SeatHandler for WaylandState {
                 }
             }
             Capability::Touch => {
-                self.seat.get_touch(qh, &seat).ok();
+                self.wl_touch = self.seat.get_touch(qh, &seat).ok();
             }
             _ => {}
         }
@@ -68,11 +69,27 @@ impl SeatHandler for WaylandState {
     ) {
         match capability {
             Capability::Pointer => {
-                self.wl_pointer = None;
+                if let Some(pointer) = self.wl_pointer.take()
+                    && pointer.version() >= 3
+                {
+                    pointer.release();
+                }
                 self.pointer_surface = None;
             }
             Capability::Keyboard => {
+                if let Some(keyboard) = self.wl_keyboard.take()
+                    && keyboard.version() >= 3
+                {
+                    keyboard.release();
+                }
                 self.keyboard_focus = None;
+            }
+            Capability::Touch => {
+                if let Some(touch) = self.wl_touch.take()
+                    && touch.version() >= 3
+                {
+                    touch.release();
+                }
             }
             _ => {}
         }
