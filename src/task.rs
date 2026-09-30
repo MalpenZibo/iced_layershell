@@ -89,6 +89,22 @@ impl<M> Task<M> {
         Self::Iced(iced_runtime::Task::perform(future, f))
     }
 
+    /// A task that runs a future and produces its output as a message.
+    pub fn future(future: impl std::future::Future<Output = M> + Send + 'static) -> Self
+    where
+        M: Send + 'static,
+    {
+        Self::Iced(iced_runtime::Task::future(future))
+    }
+
+    /// A task that runs a stream and produces each of its items as a message.
+    pub fn stream(stream: impl iced_futures::futures::Stream<Item = M> + Send + 'static) -> Self
+    where
+        M: Send + 'static,
+    {
+        Self::Iced(iced_runtime::Task::stream(stream))
+    }
+
     /// Batch multiple tasks together.
     #[allow(clippy::missing_panics_doc)] // unwrap is guarded by len() == 1
     pub fn batch(tasks: impl IntoIterator<Item = Self>) -> Self {
