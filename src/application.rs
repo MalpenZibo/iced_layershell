@@ -281,11 +281,19 @@ where
         vsync: true,
     };
 
+    let (ping, ping_source) =
+        calloop::ping::make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
+    let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Action<Message>>();
+    let wakeup_sender = WakeupSender {
+        inner: runtime_sender,
+        ping: ping.clone(),
+    };
+
     let mut compositor = futures::executor::block_on(iced_renderer::Compositor::new(
         graphics_settings,
         window_handle.clone(),
         window_handle.clone(),
-        iced_graphics::Shell::headless(),
+        iced_graphics::Shell::new(wakeup_sender.clone()),
     ))
     .map_err(Error::Graphics)?;
 
@@ -297,13 +305,6 @@ where
 
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
-    let (ping, ping_source) =
-        calloop::ping::make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
-    let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Action<Message>>();
-    let wakeup_sender = WakeupSender {
-        inner: runtime_sender,
-        ping: ping.clone(),
-    };
     let mut runtime = iced_futures::Runtime::new(executor, wakeup_sender);
     let exit_flag = Arc::new(AtomicBool::new(false));
 
@@ -971,8 +972,22 @@ fn run_action<Message: std::fmt::Debug>(
             exit_flag.store(true, Ordering::Relaxed);
             ping.ping();
         }
+        Action::Window(iced_runtime::window::Action::RedrawAll) => {
+            for iced_s in iced_surfaces.values_mut() {
+                iced_s.needs_redraw = true;
+            }
+        }
+        Action::Window(iced_runtime::window::Action::RelayoutAll) => {
+            for (id, iced_s) in iced_surfaces.iter_mut() {
+                if let Some(ui) = user_interfaces.remove(id) {
+                    user_interfaces
+                        .insert(*id, ui.relayout(iced_s.viewport.logical_size(), renderer));
+                }
+                iced_s.needs_redraw = true;
+            }
+        }
         _ => {
-            // Window, System, Image actions are not applicable to layer shell
+            // Other Window, System and Image actions are not applicable to layer shell
         }
     }
 }
