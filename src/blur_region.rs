@@ -130,11 +130,13 @@ mod tests {
 
     #[test]
     fn zero_size_is_empty() {
-        assert!(
-            rounded_rect_to_blur_rects(rect(0.0, 0.0, 0.0, 10.0), Radius::from(4.0)).is_empty()
+        assert_eq!(
+            rounded_rect_to_blur_rects(rect(0.0, 0.0, 0.0, 10.0), Radius::from(4.0)),
+            []
         );
-        assert!(
-            rounded_rect_to_blur_rects(rect(0.0, 0.0, 10.0, 0.0), Radius::from(4.0)).is_empty()
+        assert_eq!(
+            rounded_rect_to_blur_rects(rect(0.0, 0.0, 10.0, 0.0), Radius::from(4.0)),
+            []
         );
     }
 
@@ -211,7 +213,7 @@ mod tests {
         // A pill: without clamping the top and bottom bands would overlap.
         let bounds = rect(0.0, 0.0, 100.0, 40.0);
         let out = rounded_rect_to_blur_rects(bounds, Radius::from(500.0));
-        assert!(!out.is_empty());
+        assert_ne!(out, []);
         for r in &out {
             assert!(r.x >= 0 && r.y >= 0);
             assert!((r.x + r.width) <= 100 && (r.y + r.height) <= 40);
