@@ -411,7 +411,7 @@ mod tests {
         begin_frame(true);
         record(rect(0.0, 0.0, 100.0, 40.0), Radius::from(8.0));
         let rects = take_rects(0.5);
-        assert!(!rects.is_empty());
+        assert_ne!(rects, []);
         for r in &rects {
             assert!(r.width > 0 && r.height > 0, "degenerate rect: {r:?}");
             assert!(r.x >= 0 && r.y >= 0 && r.x + r.width <= 50 && r.y + r.height <= 20);
@@ -430,7 +430,7 @@ mod tests {
     fn nothing_is_recorded_while_disabled() {
         begin_frame(false);
         record(rect(0.0, 0.0, 10.0, 10.0), Radius::from(0.0));
-        assert!(take_rects(1.0).is_empty());
+        assert_eq!(take_rects(1.0), []);
     }
 
     #[test]
@@ -438,6 +438,6 @@ mod tests {
         begin_frame(true);
         record(rect(0.0, 0.0, 10.0, 10.0), Radius::from(0.0));
         begin_frame(true);
-        assert!(take_rects(1.0).is_empty());
+        assert_eq!(take_rects(1.0), []);
     }
 }

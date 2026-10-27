@@ -51,3 +51,24 @@ impl<M> Sink<Action<M>> for WakeupSender<M> {
 }
 
 impl<M> Unpin for WakeupSender<M> {}
+
+impl<M> WakeupSender<M> {
+    fn send(&self, action: Action<M>) {
+        if self.inner.unbounded_send(action).is_ok() {
+            self.ping.ping();
+        }
+    }
+}
+
+/// Lets the renderer reach the main loop, the way `iced_winit`'s proxy does:
+/// image decodes and uploads finish on a worker and ask for a relayout or a
+/// redraw, which a headless shell would drop.
+impl<M: Send + 'static> iced_graphics::shell::Notifier for WakeupSender<M> {
+    fn request_redraw(&self) {
+        self.send(Action::Window(iced_runtime::window::Action::RedrawAll));
+    }
+
+    fn invalidate_layout(&self) {
+        self.send(Action::Window(iced_runtime::window::Action::RelayoutAll));
+    }
+}
